@@ -3,21 +3,35 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { splitArgs } from '../core/args.mjs';
-import { APP } from '../core/paths.mjs';
+import { APP, expandHome } from '../core/paths.mjs';
 import { COMMANDS, bodyFromStep, createContext } from './api.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const rectText = rect => (rect ? `${rect.x},${rect.y} ${rect.w}x${rect.h}` : '');
 
-function loadScene(file) {
+// {"include": "route.json"} is replaced by that scene's steps: relative to the including file, "~/" as in a shell.
+function readScene(file, chain = []) {
+  const resolved = path.resolve(file);
+  if (chain.includes(resolved)) throw new Error(`${file}: include cycle (${[...chain, resolved].join(' -> ')})`);
   let scene;
   try {
-    scene = JSON.parse(fs.readFileSync(file, 'utf8'));
+    scene = JSON.parse(fs.readFileSync(resolved, 'utf8'));
   } catch (error) {
     throw new Error(`${file}: ${error.message}`);
   }
-  const steps = Array.isArray(scene) ? scene : scene.steps;
-  if (!Array.isArray(steps) || !steps.length) throw new Error(`${file}: expected a list of steps or {"steps": [...]}`);
+  const own = Array.isArray(scene) ? scene : scene.steps;
+  if (!Array.isArray(own) || !own.length) throw new Error(`${file}: expected a list of steps or {"steps": [...]}`);
+  const steps = own.flatMap(step => {
+    const keys = step && typeof step === 'object' ? Object.keys(step) : [];
+    if (keys.length !== 1 || keys[0] !== 'include') return [step];
+    if (typeof step.include !== 'string') throw new Error(`${file}: "include" takes a file name`);
+    return readScene(path.resolve(path.dirname(resolved), expandHome(step.include)), [...chain, resolved]).steps;
+  });
+  return { scene, steps };
+}
+
+function loadScene(file) {
+  const { scene, steps } = readScene(file);
   const names = new Set();
   steps.forEach((step, index) => {
     const keys = step && typeof step === 'object' ? Object.keys(step) : [];
@@ -31,7 +45,7 @@ function loadScene(file) {
     if (name === 'record' && !starts && bodyFromStep(name, step.record).action !== 'stop') {
       throw new Error(`${file}: step ${index + 1}: record is {"action": "start", "name": ...} or "stop"`);
     }
-    if (name === 'capture' || name === 'frames' || starts) {
+    if (name === 'capture' || name === 'shot' || name === 'frames' || starts) {
       const captureName = step[name]?.name;
       if (typeof captureName !== 'string' || !/^[\w.-]+$/.test(captureName)) {
         throw new Error(`${file}: step ${index + 1}: ${name} needs "name" (letters, digits, . _ -), `
@@ -47,7 +61,7 @@ function loadScene(file) {
 }
 
 function captureFile(name, body) {
-  if (name === 'capture') return `${body.name}.png`;
+  if (name === 'capture' || name === 'shot') return `${body.name}.png`;
   if (body.format === 'gif') return `${body.name}.gif`;
   return body.format === 'png-sequence' ? body.name : `${body.name}.png`;
 }
@@ -78,7 +92,7 @@ async function runStep(context, step, outDir, server) {
     return { capture: { name: path.basename(file, '.wav'), file: local(image), audio: local(file),
       video: local(video), ...details } };
   }
-  if (name === 'capture' || name === 'frames') {
+  if (name === 'capture' || name === 'shot' || name === 'frames') {
     const file = captureFile(name, body);
     const { name: captureName, ...rest } = body;
     const result = await context.run(name, { ...rest, out: path.join(outDir, file) });
@@ -117,7 +131,9 @@ async function run(config, argv) {
         const info = capture.audio
           ? `${capture.video ?? capture.audio}  ${capture.durationMs} ms  peak ${capture.peakDb} dB  `
             + `onsets [${capture.onsets.map(onset => onset.ms).join(', ')}]`
-          : `${capture.width}x${capture.height}  rect ${rectText(capture.rect)}`;
+          : `${capture.width}x${capture.height}  rect ${rectText(capture.rect)}`
+            + (capture.hovered?.name ? `  hovered ${JSON.stringify(capture.hovered.name)}` : '')
+            + (capture.clipped ? `  CLIPPED ${capture.clipped.join(',')}` : '');
         if (!flags.json) console.log(`ok   ${index + 1} ${name} ${capture.file}  ${info}`);
       } else if (!flags.json) console.log(`ok   ${index + 1} ${name}  ${entry.ms} ms`);
     } catch (error) {

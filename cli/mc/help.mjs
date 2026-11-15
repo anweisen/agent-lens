@@ -28,23 +28,33 @@ act
   chat <text...> [--wait-ticks N] | --clear    message, or command with a leading /; prints the feedback lines
   key <key> [tap|down|up] [--shift] [--ctrl]
   type <text...> [--widget LABEL] [--clear]    text into the focused (or named, or first) text input, sign, book
-  click  --slot N | --x N --y N | --widget LABEL  [--button left|right|middle] [--shift] [--ctrl] [--double]
-  hover  --slot N | --x N --y N | --widget LABEL | --none      x, y are GUI coordinates (pixels / guiScale)
+  click  --slot N | --item NAME | --x N --y N | --widget LABEL  [--button left|right|middle] [--shift] [--ctrl]
+         [--double]         NAME: item name pattern (case-insensitive regex); ambiguous or missing = error + list
+  hover  --slot N | --item NAME | --text RE | --x N --y N | --widget LABEL | --none    x, y: GUI coordinates
+         --text: any text drawn on screen (a chat component, dialog text); the lowest match wins; also on click
   use [item|block|entity]      attack [item|block|entity]
   hotbar <0-8>
   look --yaw N --pitch N | --at x,y,z
   camera [first|back|front] [--fixed-pos x,y,z --fixed-yaw N --fixed-pitch N | --fixed-at x,y,z] [--fov N]
          [--hide-hud] [--hide-hand] [--hide-player] | --reset
-  settings [--gui-scale N] [--window-w N --window-h N] [--time freeze|run] [--hold-hud] [--toasts]
+  settings [--gui-scale N] [--window-w N --window-h N] [--language de_de] [--time freeze|run] [--hold-hud] [--toasts]
            [--text-cursor] [--item-name] [--steady-player false]
 
-read (data, not pixels)
-  screen    hud [--lines N]    regions
+read (data, not pixels; use these, not a screenshot, to see where you are)
+  screen [--brief]    hud [--lines N]    regions    texts (every text drawn right now, with GUI position)
+                            --brief: title, widget labels and "slot  item name" lines only
+  expect [--screen RE] [--no-screen] [--item RE [--tooltip RE]] [--widget RE] [--chat RE] [--text RE]
+         [--timeout-ms 5000]
+                            waits until all hold; else exit 1 with what is there instead (title, items, lines)
 
 capture
+  shot <target> [--item NAME | --slot N | --widget L | --text RE] --out FILE [--gui-scale N] [--pad 8] [--fit false]
+          the evidence shot: targets menu, tooltip, item (slot + tooltip), menu+tooltip, or any region name.
+          Hovers the item, waits for the tooltip, enlarges the window when content would be cut off, and
+          prints the hovered item and its tooltip lines as text.
   capture <region...> --out FILE [--pad N] [--gui-scale N] [--hover-slot N | --hover-widget L]
           [--settle-frames N] [--chat true|false]
-          regions: full screen slot:N slots:A-B tooltip screen+tooltip chat actionbar title sidebar bossbar
+          regions: full screen slot:N slots:A-B item:NAME tooltip screen+tooltip chat actionbar title sidebar bossbar
           hotbar status tablist effects crosshair widget:LABEL or '{"x":..,"y":..,"w":..,"h":..}'; several
           regions give their union. Chat lines are left out unless the region is full, chat or a pixel rect.
   frames <region> --count N --interval-ticks N --out FILE --format gif|sheet|png-sequence [--columns N]
@@ -54,6 +64,7 @@ capture
 
 scenes
   scene run <scene.json> --out <dir> [--server NAME] [--keep-going] [--restart] [--force]
+          extra steps: {"shot": {"target", "item", "name"}}, {"expect": {...}}, {"include": "route.json"}
   scene compare --before <dir> --after <dir> --out <dir> [--labels A,B] [--layout L] [--scale N] [--pixel-diff]
 
 escape hatch

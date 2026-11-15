@@ -3,6 +3,8 @@ package net.anweisen.agentlens.game;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 import net.anweisen.agentlens.http.ApiException;
 import net.anweisen.agentlens.util.Rect;
 import net.anweisen.agentlens.util.Reflect;
@@ -12,6 +14,7 @@ import net.minecraft.client.gui.components.events.ContainerEventHandler;
 import net.minecraft.client.gui.components.events.GuiEventListener;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.Slot;
 
 /** Geometry of the open screen. GUI coordinates unless a method says pixels. Client thread only. */
@@ -65,6 +68,67 @@ public final class Screens {
       throw ApiException.bad("slot " + index + " does not exist, the screen has slots 0-" + (slots.size() - 1));
     }
     return slots.get(index);
+  }
+
+  /** A case-insensitive regular expression; text that does not compile as one is matched literally. */
+  public static Pattern pattern(String text) {
+    int flags = Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE;
+    try {
+      return Pattern.compile(text, flags);
+    } catch (PatternSyntaxException invalid) {
+      return Pattern.compile(Pattern.quote(text), flags);
+    }
+  }
+
+  /** Item name as plain text: no legacy formatting codes, trimmed. */
+  public static String itemName(Slot slot) {
+    return slot.getItem().getHoverName().getString().replaceAll("\u00a7.", "").trim();
+  }
+
+  public static boolean isPlayerSlot(Slot slot) {
+    return slot.container instanceof Inventory;
+  }
+
+  /**
+   * Index of the one slot whose item name matches: a case-insensitive regular expression (plain text when it does
+   * not compile). A full-name match beats a partial one, a slot of the container beats the player's inventory;
+   * what is still ambiguous is an error that lists the candidates.
+   */
+  public static int slotByItem(AbstractContainerScreen<?> screen, String text) {
+    Pattern pattern = pattern(text);
+    List<Slot> slots = screen.getMenu().slots;
+    List<Integer> partial = new ArrayList<>();
+    List<Integer> full = new ArrayList<>();
+    for (int index = 0; index < slots.size(); index++) {
+      Slot slot = slots.get(index);
+      if (slot.getItem().isEmpty()) continue;
+      String name = itemName(slot);
+      if (name.equalsIgnoreCase(text.trim()) || pattern.matcher(name).matches()) full.add(index);
+      else if (pattern.matcher(name).find()) partial.add(index);
+    }
+    List<Integer> found = full.isEmpty() ? partial : full;
+    if (found.size() > 1) {
+      List<Integer> inContainer = found.stream().filter(index -> !isPlayerSlot(slots.get(index))).toList();
+      if (!inContainer.isEmpty()) found = inContainer;
+    }
+    if (found.size() == 1) return found.get(0);
+    if (found.isEmpty()) {
+      List<String> names = new ArrayList<>();
+      for (int index = 0; index < slots.size(); index++) {
+        Slot slot = slots.get(index);
+        if (slot.getItem().isEmpty() || isPlayerSlot(slot) || itemName(slot).isEmpty()) continue;
+        names.add(index + " " + itemName(slot));
+      }
+      // nothing in a container (the player's own inventory screen): then the player slots are the candidates
+      for (int index = 0; names.isEmpty() && index < slots.size(); index++) {
+        Slot slot = slots.get(index);
+        if (!slot.getItem().isEmpty() && !itemName(slot).isEmpty()) names.add(index + " " + itemName(slot));
+      }
+      throw new ApiException(404, "no item named like \"" + text + "\" on this screen, items: " + names);
+    }
+    List<String> names = found.stream().map(index -> index + " " + itemName(slots.get(index))).toList();
+    throw ApiException.conflict(found.size() + " items are named like \"" + text + "\": " + names
+      + "; use a narrower pattern or the slot number");
   }
 
   public static Rect slotRect(AbstractContainerScreen<?> screen, Slot slot) {

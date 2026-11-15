@@ -60,6 +60,7 @@ public final class Hooks {
   public static void guiEnd() {
     try {
       Regions.guiEnd();
+      net.anweisen.agentlens.capture.Texts.guiEnd();
     } catch (Throwable error) {
       Lens.LOG.error("gui hook failed", error);
     }

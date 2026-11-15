@@ -63,12 +63,12 @@ resolved first and the address literal is used, so no SRV lookup can redirect th
 | POST | `/key` | `{key, action?: "tap"\|"down"\|"up", shift?, ctrl?}` | key binding name (`key.inventory`, `key.chat`, `key.drop`), key name (`key.keyboard.e`, `key.mouse.left`) or short form (`e`, `escape`, `enter`, `space`, `tab`, `f3`, `left.shift`). Returns `{key, screen}`. |
 | POST | `/type` | `{text, widget?, clear?}` | types into a text input of the open screen: the one whose label matches `widget` (only text inputs are candidates), else the focused one, else the first. It is focused by a click. Text is appended; `clear` empties the input first. `\n` is the enter key. A screen without text inputs (sign, book) receives the characters itself. Returns `{typed, widget, value, screen}` (`value`: the input's content afterwards, null for a sign). |
 | POST | `/click` | `{slot}` or `{x, y}` or `{widget: "<label>"}`, `button?: "left"\|"right"\|"middle"`, `shift?`, `ctrl?`, `double?` | click in the open screen. `x, y` are GUI coordinates (pixels / guiScale). The virtual mouse stays on the target afterwards. Returns `{screen}`. |
-| POST | `/hover` | `{slot}` or `{x, y}` or `{widget}` or `{none: true}` | sets the virtual mouse (no OS input), so the tooltip renders. Persists until changed or until another screen opens. Returns `{gui: [x, y]\|null, tooltip: rect\|null}`. |
+| POST | `/hover` | `{slot}` or `{item}` or `{text}` or `{x, y}` or `{widget}` or `{none: true}` | sets the virtual mouse (no OS input), so the tooltip renders. Persists until changed or until another screen opens. Returns `{gui: [x, y]\|null, hovered?: {slot, name, tooltip: [..]}, tooltip: rect\|null}`. `item` (also on `/click`) is an item name pattern: a case-insensitive regular expression; a full-name match beats a partial one, a container slot beats the player inventory, no match is a 404 listing the items, several are a 409 listing the candidates. `text` (also on `/click`) is a pattern for any text drawn in the frame (chat line, dialog text, label), read from the frame's GUI render state: the mouse goes to the middle of the match; of several matches the lowest on screen wins (the newest chat line), `matched: {text, matches}` reports it, no match is a 404 listing the texts. A tooltip that is not an item's comes back as `tooltipText: [..]`. |
 | POST | `/use` | `{target?: "item"\|"block"\|"entity"}` | right click in the world with what the crosshair is on. With `target`, 409 unless the crosshair is on that kind (`item` = on nothing). Returns `{target: {type, pos}, screen}`. `/attack` likewise (left click, one press). |
 | POST | `/hotbar` | `{slot}` | select hotbar slot 0-8, returns when the hand is at rest. Returns `{slot, item}`. |
 | POST | `/look` | `{yaw, pitch}` or `{at: [x, y, z]}` | turns the player (yaw 0 = +z, -90 = +x). Returns `{yaw, pitch, target}`. |
 | POST | `/camera` | `{mode?: "first"\|"back"\|"front", fixed?: {pos: [x,y,z], yaw, pitch}\|{pos, at: [x,y,z]}\|null, fov?: 30-110, hideHud?, hideHand?, hidePlayer?, reset?}` | returns the resulting `{mode, fixed, fov, hideHud, hideHand, hidePlayer, pos}` |
-| POST | `/settings` | `{guiScale?, window?: {w, h}, time?: "freeze"\|"run", holdHud?, steadyPlayer?, itemName?, toasts?, textCursor?}` | persistent until changed (until the client stops). Returns `{window, guiScale, guiWidth, guiHeight, holdHud, steadyPlayer, itemName, toasts, textCursor}`. |
+| POST | `/settings` | `{guiScale?, window?: {w, h}, language?, time?: "freeze"\|"run", holdHud?, steadyPlayer?, itemName?, toasts?, textCursor?}` | persistent until changed (until the client stops). Returns `{window, guiScale, guiWidth, guiHeight, holdHud, steadyPlayer, itemName, toasts, textCursor}`. |
 | POST | `/resourcepack` | `{path, timeoutMs?: 120000}` or `{clear: true}` | applies one local resource pack above all others and returns when the resource reload has finished. Returns `{pack, source, compatible, reloaded, ms, selected: [pack ids]}`. |
 
 `/camera`: `fixed` detaches the camera to an exact pose (`at` computes yaw and pitch towards a point) and, when the
@@ -104,7 +104,8 @@ servers that send no pack of their own (custom font glyphs would render as boxes
 
 | Method | Path | Result |
 |---|---|---|
-| GET | `/screen` | `{guiScale, guiWidth, guiHeight, class, title, titleJson, rect, widgets: [{label, type, rect, active}], slots?: [{index, rect, item}], carried?}`; `class: null` when no screen is open. `item` is `{id, count, name, lore: [..], tooltip: [..]}` or null, all plain text; `tooltip` is every tooltip line. `titleJson` is the title as a text component (fonts and colours a plain string loses; a title can be a single private-use character that a server pack maps to a GUI texture). In a creative inventory the slot indices are those of the creative menu, not of the survival inventory: read them here. Works for server dialogs (`net.minecraft.client.gui.screens.dialog.*`) like for any other screen. |
+| GET | `/texts` | `{texts: [{text, x, y}]}`: every text the game submitted for the next GUI frame with the GUI position of its middle. Read on request from the frame's render state (reflection on `Gui.guiRenderState` and `GuiTextRenderState`). |
+| GET | `/screen` | `{guiScale, guiWidth, guiHeight, class, title, titleJson, rect, widgets: [{label, type, rect, active}], slots?: [{index, rect, item}], carried?}`; `class: null` when no screen is open. `item` is `{id, count, name, lore: [..], tooltip: [..]}` or null, all plain text; a slot of the player's inventory has `player: true`; `tooltip` is every tooltip line. `titleJson` is the title as a text component (fonts and colours a plain string loses; a title can be a single private-use character that a server pack maps to a GUI texture). In a creative inventory the slot indices are those of the creative menu, not of the survival inventory: read them here. Works for server dialogs (`net.minecraft.client.gui.screens.dialog.*`) like for any other screen. |
 | GET | `/hud` | `{hidden, chat: {lines}, actionbar: {text, ticksLeft}, title: {title, subtitle, ticksLeft}, bossbar: {bars: [{name, progress, color}]}, sidebar: {title, lines: [{name, score}]}, hotbar: {selected}}`; each part also has `visible` (drawn in the last frame) and `rect` (where it was last drawn, or null). `POST /hud {"lines": N}` selects how many chat lines (default 20). |
 | GET | `/regions` | all region rects of the last frame: `{full: rect, screen: rect, tooltip: rect, ...}` |
 
@@ -130,6 +131,7 @@ servers that send no pack of their own (custom font glyphs would render as boxes
   - `screen`: what the open screen drew, measured (without its tooltip and without window-covering backdrops); for
     container screens united with the container panel, so creative tabs and the recipe book are included.
   - `slot:<n>`, `slots:<a>-<b>`: slot rects of a container screen (indices as in `/screen`).
+  - `item:<name>`: the slot of the item with that name (pattern as in `/hover`).
   - `widget:<label>`: a widget of the open screen; exact label, else case-insensitive, else substring.
   - `tooltip`: where the tooltip was drawn in this frame. `screen+tooltip`: union.
   - HUD: `chat`, `actionbar`, `title` (with subtitle), `sidebar`, `bossbar`, `hotbar`, plus `status` (hotbar with
@@ -153,10 +155,23 @@ servers that send no pack of their own (custom font glyphs would render as boxes
 - PNG files are encoded in memory at the highest deflate level, as a palette image when the shot has at most 256
   colours (whichever is smaller), and written once. Forges store uploads unchanged, so this is the size they keep.
 - `hover`: same as `/hover`, applied for this shot only, then restored.
+- `waitMs` (default 1000): how long to wait for the named measured regions to appear (a tooltip follows the hover
+  by a frame or two) before the shot answers 404.
+- `fit` (default false): when a named measured region reaches beyond the window, the window is enlarged for this
+  shot (and restored) until the content is complete at the wanted GUI scale: a tall tooltip, a panel larger than
+  the window. Up to 3840x2160 it also makes room beside the mouse so the game does not push a tooltip against an
+  edge; beyond that, up to the window limit, only as far as the content needs. The result then has
+  `fitted: {x, y, w, h}` (the window used).
+- `clipped: [names]` in the result: these regions are larger than the window, so the picture lacks part of them
+  (only without `fit`, or beyond the window limit). A tooltip merely touching an edge is not clipped.
+- `hovered: {slot, name, tooltip: [..]}` in the result when the virtual mouse is on a slot: what the picture shows
+  as text, to check a shot without opening it. Any other tooltip in the frame is reported as `tooltipText: [..]`.
+- A named region that fits the window but lies against its edge (a tooltip the game pushed there, whose transparent
+  margin hangs over) is trimmed alike on the opposite side, and its padding too, so the content stays centred.
 - `settleFrames` (default 2): frames rendered with the shot state before the captured one.
 - The frame is read from the main render target after a finished frame through the game's own readback, so it works
   on the OpenGL and the Vulkan backend.
-- Result: `{file, width, height, rect, regions: {<name>: rect, ...}, guiScale}`.
+- Result: `{file, width, height, rect, regions: {<name>: rect, ...}, guiScale, hovered?, clipped?, fitted?}`.
 - A region that is not on screen is a 404 naming the regions that are.
 
 `POST /frames`: `{region, count?: 8, intervalTicks?: 2, out, format?: "sheet"\|"gif"\|"png-sequence", columns?,

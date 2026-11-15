@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Locale;
 import net.anweisen.agentlens.capture.Capture;
 import net.anweisen.agentlens.capture.Regions;
+import net.anweisen.agentlens.capture.Texts;
 import net.anweisen.agentlens.core.Lens;
 import net.anweisen.agentlens.game.ClientThread;
 import net.anweisen.agentlens.game.Scene;
@@ -82,6 +83,7 @@ final class ScreenApi {
           entry.addProperty("index", index);
           entry.add("rect", Screens.toPixels(Screens.slotRect(container, slot)).json());
           entry.add("item", item(minecraft, slot.getItem()));
+          if (Screens.isPlayerSlot(slot)) entry.addProperty("player", true);
           slots.add(entry);
         }
         json.add("slots", slots);
@@ -126,6 +128,10 @@ final class ScreenApi {
       Screens.slot(container, slot);
       return new Scene.Hover(screen, slot, null, null, null);
     }
+    if (Json.has(spec, "item")) {
+      int slot = Screens.slotByItem(Screens.requireContainer(), Json.require(spec, "item"));
+      return new Scene.Hover(screen, slot, null, null, null);
+    }
     if (Json.has(spec, "widget")) {
       String label = Json.require(spec, "widget");
       Screens.widget(Screens.require(), label);
@@ -134,20 +140,83 @@ final class ScreenApi {
     if (Json.has(spec, "x") && Json.has(spec, "y")) {
       return new Scene.Hover(screen, null, Json.number(spec, "x", 0), Json.number(spec, "y", 0), null);
     }
-    throw ApiException.bad("expected {slot}, {x, y} (GUI coordinates), {widget} or {none: true}");
+    throw ApiException.bad("expected {slot}, {item} (name pattern), {text} (pattern of text on screen), {x, y} "
+      + "(GUI coordinates), {widget} or {none: true}");
   }
 
   static JsonElement hover(JsonObject body) {
-    ClientThread.run(() -> Scene.hover = parseHover(body));
-    ClientThread.awaitFrames(1);
-    return ClientThread.call(() -> {
-      JsonObject json = new JsonObject();
+    JsonObject target = locateText(body);
+    ClientThread.run(() -> Scene.hover = parseHover(target));
+    ClientThread.awaitFrames(2);
+    JsonObject json = ClientThread.call(() -> {
+      JsonObject result = new JsonObject();
       double[] gui = Screens.hoverGui(Scene.hover);
-      json.add("gui", gui == null ? null : Json.array(gui[0], gui[1]));
+      result.add("gui", gui == null ? null : Json.array(gui[0], gui[1]));
+      if (target != body) result.add("matched", target.get("matched"));
+      JsonElement hovered = hovered();
+      if (hovered != null) result.add("hovered", hovered);
       Rect tooltip = Regions.current().get("tooltip");
-      json.add("tooltip", tooltip == null ? null : tooltip.json());
-      return json;
+      result.add("tooltip", tooltip == null ? null : tooltip.json());
+      return result;
     });
+    if (!json.has("hovered") && !json.get("tooltip").isJsonNull()) json.add("tooltipText", tooltipText());
+    return json;
+  }
+
+  /**
+   * API thread. A target given as {text: pattern} becomes the {x, y} where that text is drawn in the next frame
+   * (plus "matched" for the answer); any other target is returned as it is.
+   */
+  static JsonObject locateText(JsonObject spec) {
+    if (spec == null || !Json.has(spec, "text")) return spec;
+    Texts.Located at = Texts.locate(Json.require(spec, "text"));
+    JsonObject target = spec.deepCopy();
+    target.remove("text");
+    target.addProperty("x", at.x());
+    target.addProperty("y", at.y());
+    JsonObject matched = new JsonObject();
+    matched.addProperty("text", at.text());
+    matched.addProperty("matches", at.matches());
+    target.add("matched", matched);
+    return target;
+  }
+
+  /** API thread. The lines drawn inside the tooltip of the next frame, top to bottom: any tooltip, not only items. */
+  static JsonArray tooltipText() {
+    List<Texts.Run> runs = Texts.snapshot();
+    return ClientThread.call(() -> {
+      JsonArray lines = new JsonArray();
+      Rect tooltip = Regions.current().get("tooltip");
+      if (tooltip == null) return lines;
+      int scale = Screens.scale();
+      // a line of the tooltip starts and ends inside it; text behind it (a chat line) does not
+      runs.stream().filter(run -> inside(tooltip, run.gui(0, 0), scale)
+          && inside(tooltip, run.gui(run.text().length(), run.text().length()), scale))
+        .map(run -> new Object[] {run.gui(0, run.text().length()), run.text()})
+        .sorted(java.util.Comparator.comparingDouble(entry -> ((double[]) entry[0])[1]))
+        .forEach(entry -> lines.add((String) entry[1]));
+      return lines;
+    });
+  }
+
+  private static boolean inside(Rect rect, double[] gui, int scale) {
+    return gui[0] * scale >= rect.x() && gui[0] * scale <= rect.right()
+      && gui[1] * scale >= rect.y() && gui[1] * scale <= rect.bottom();
+  }
+
+  static JsonElement texts(JsonObject body) {
+    JsonArray texts = new JsonArray();
+    for (Texts.Run run : Texts.snapshot()) {
+      double[] gui = run.gui(0, run.text().length());
+      JsonObject entry = new JsonObject();
+      entry.addProperty("text", run.text());
+      entry.addProperty("x", Math.round(gui[0]));
+      entry.addProperty("y", Math.round(gui[1]));
+      texts.add(entry);
+    }
+    JsonObject json = new JsonObject();
+    json.add("texts", texts);
+    return json;
   }
 
   static JsonElement click(JsonObject body) {
@@ -159,10 +228,11 @@ final class ScreenApi {
     };
     int modifiers = (Json.bool(body, "shift", false) ? 1 : 0) | (Json.bool(body, "ctrl", false) ? 0x40 : 0);
     boolean doubleClick = Json.bool(body, "double", false);
+    JsonObject spec = locateText(body);
     ClientThread.run(() -> {
       Screens.require();
-      Scene.Hover target = parseHover(body);
-      if (target == null) throw ApiException.bad("expected {slot}, {x, y} (GUI coordinates) or {widget}");
+      Scene.Hover target = parseHover(spec);
+      if (target == null) throw ApiException.bad("expected {slot}, {item}, {x, y} (GUI coordinates) or {widget}");
       clickAt(target, button, modifiers, doubleClick ? 2 : 1);
     });
     ClientThread.awaitFrames(2);
@@ -171,6 +241,23 @@ final class ScreenApi {
       json.add("screen", GameApi.screenJson(Screens.current()));
       return json;
     });
+  }
+
+  /** Client thread. The slot under the virtual mouse with its item name and tooltip lines as text, or null. */
+  static JsonElement hovered() {
+    Scene.Hover hover = Scene.hover;
+    AbstractContainerScreen<?> container = Screens.container();
+    if (hover == null || hover.slot() == null || container == null || hover.screen() != container) return null;
+    List<Slot> slots = container.getMenu().slots;
+    if (hover.slot() >= slots.size()) return null;
+    Slot slot = slots.get(hover.slot());
+    JsonObject json = new JsonObject();
+    json.addProperty("slot", hover.slot());
+    if (slot.getItem().isEmpty()) return json;
+    json.addProperty("name", Screens.itemName(slot));
+    JsonObject item = item(Minecraft.getInstance(), slot.getItem()).getAsJsonObject();
+    json.add("tooltip", item.get("tooltip"));
+    return json;
   }
 
   /** Client thread. Moves the virtual mouse onto the target and presses a button there. */

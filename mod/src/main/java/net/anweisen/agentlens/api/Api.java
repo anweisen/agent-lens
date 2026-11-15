@@ -21,6 +21,7 @@ public final class Api {
 
     server.get("/screen", ScreenApi::screen);
     server.get("/regions", ScreenApi::regions);
+    server.get("/texts", ScreenApi::texts);
     server.get("/hud", HudApi::hud);
     server.post("/hover", ScreenApi::hover);
     server.post("/click", ScreenApi::click);

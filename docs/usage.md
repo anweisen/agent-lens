@@ -67,21 +67,31 @@ agent-lens mc chat --clear                     # empties the chat HUD
 agent-lens mc key escape                       # key e | key key.inventory down; escape without a screen = pause menu
 agent-lens mc type Klinge des Nordens          # into the focused or first text input; --widget Name, --clear
 agent-lens mc click --slot 13 [--button right] [--shift] [--double]    # or --x 120 --y 80, or --widget Done
+agent-lens mc click --item 'Private Server'    # by item name (case-insensitive regex) instead of a slot number
 agent-lens mc hover --slot 13                  # virtual mouse, makes the tooltip render; --none clears it
+agent-lens mc hover --item Minuten             # prints the hovered item and its tooltip lines
+agent-lens mc hover --text ':smile:'           # onto text drawn on screen (chat component, dialog); also click --text
 agent-lens mc use block | attack entity | hotbar 0
 agent-lens mc look --yaw 90 --pitch 0          # or --at 10,64,-3
 agent-lens mc camera back --fixed-pos 0,70,0 --fixed-yaw 180 --fixed-pitch 10 --fov 70 --hide-hud
 agent-lens mc camera --fixed-pos 3,66,3 --fixed-at 0.5,65,0.5    # look-at instead of yaw and pitch
 agent-lens mc camera --reset                   # also: --hide-hand, --hide-player
 agent-lens mc settings --gui-scale 2 --window-w 1280 --window-h 720 --time freeze
+agent-lens mc settings --language de_de        # client language (reloads, is saved, the server is told)
 agent-lens mc settings --hold-hud              # action bar and title stay instead of fading; --hold-hud false ends it
 
-# read (use these to find slots, widgets and what is on screen before capturing)
-agent-lens mc screen        # class, title, widgets, non-empty slots with item name, lore and tooltip lines
+# read (use these, never a screenshot, to see which screen is open and what is on it)
+agent-lens mc screen --brief   # title, widget labels, one "slot  item name" line per named container item
+agent-lens mc screen        # everything: rects, lore and tooltip lines of every slot
+agent-lens mc expect --screen Timer --item Minuten --tooltip 'Shift'   # waits up to --timeout-ms 5000 until all
+                            # hold, else exit 1 and one line with what is there instead; also --no-screen,
+                            # --widget RE, --chat RE, --text RE (any drawn text). Replaces "wait + look".
+agent-lens mc texts         # every text drawn right now with its GUI position: dialogs, books, chat, tooltips
 agent-lens mc hud           # chat lines, action bar, title, boss bars, sidebar; --lines 50 for more chat
 agent-lens mc regions       # region rects that can be captured right now
 
 # capture
+agent-lens mc shot tooltip --item Minuten --gui-scale 3 --out shots/tooltip.png   # the evidence shot, see below
 agent-lens mc capture screen --out shots/menu.png --pad 8
 agent-lens mc capture screen tooltip --hover-slot 13 --gui-scale 4 --out shots/tooltip.png   # union of two regions
 agent-lens mc capture actionbar --pad 8 --gui-scale 3 --out shots/actionbar.png
@@ -238,6 +248,34 @@ Right after a Microsoft-session start the session server can refuse the login (`
 - Use the real account only where it is needed (online-mode servers). Develop the scene in singleplayer or on an
   offline test server first.
 
+### shot: the evidence capture
+
+`mc shot <target>` is `capture` with the defaults evidence needs, in one call: it hovers the item by name, waits
+for the tooltip, crops to what the game really drew, and enlarges the window for the shot when the content would
+not fit at the wanted GUI scale (`fit`), so a long lore or a large menu is never cut off.
+
+| Target | Picture |
+|---|---|
+| `menu` (default) | the open screen's panel |
+| `tooltip` | only the tooltip of `--item NAME` / `--slot N` / `--widget L` / `--text RE` (a chat hover: open the chat first) |
+| `item` | the slot and its tooltip |
+| `menu+tooltip` | panel and tooltip together |
+| anything else | that region: `chat`, `actionbar`, `sidebar`, `title`, `hotbar`, ... |
+
+```sh
+agent-lens mc shot tooltip --item Minuten --gui-scale 3 --out ev/tooltip.png
+#   ev/tooltip.png  427x177  guiScale 3
+#   fitted: the window was 854x598 for this shot
+#   hovered: slot 36 Minuten
+#     | Minuten
+#     | Linksklick +1
+#     | Shift + Linksklick +10
+```
+
+The printed lines are what the picture shows: check them instead of opening the PNG, and open only the final
+comparison. `CLIPPED: ...` means the content is larger than the largest window: lower `--gui-scale`. Defaults:
+`--pad 8`, `--fit true`; every `capture` flag works.
+
 ## Scenes
 
 One JSON file per piece of evidence, replayed unchanged against the base build and the PR build. A step is an
@@ -263,6 +301,14 @@ object with one key: the command name and its body (a plain value fills the firs
 - Steps: every API command (`singleplayer`, `connect`, `resourcepack`, `chat`, `type`, `wait`, `hover`, `click`,
   `camera`, `settings`, `capture`, `frames`, ...), plus `{"sleep": <ms>}` and
   `{"api": {"method": "POST", "path": "/x", "body": {}}}`.
+- `{"shot": {"target": "tooltip", "item": "Minuten", "name": "minutes"}}`: `mc shot` as a step, file
+  `<out>/minutes.png`. Prefer it over `capture` with slot numbers: a name survives a menu being rearranged.
+- `{"expect": {"screen": "Timer", "item": "Minuten"}}`: fails the run with a text message when the scene is not
+  where it should be (wrong menu, missing permission, item gone), instead of capturing the wrong thing. Put one
+  after every step that opens a screen; it waits like `wait` does, so no extra `wait` or `sleep` is needed.
+- `{"include": "route.json"}`: the steps of another scene in place, relative to the including file (`~/` works).
+  Keep the way to a place (join, open the menu, `expect` it) in a route file and include it from every evidence
+  scene for that place.
 - `{"resourcepack": "<path>"}` resolves a relative path against the working directory; `~/` is expanded.
 - `capture` and `frames` need `name`; the file is `<out>/<name>.png` (`.gif` for gif frames). No `out` field.
 - `{"record": {"action": "start", "name": "jingle", "video": "hotbar"}}` ... `{"record": "stop"}` records sound
@@ -304,9 +350,9 @@ agent-lens doctor
 
 # 1. write the scene while exploring on the PR build
 agent-lens mc connect dev && agent-lens mc wait ready
-agent-lens mc chat /punish history Notch && agent-lens mc wait screen
-agent-lens mc screen                                   # find the slot to hover, check the title
-agent-lens mc capture screen tooltip --hover-slot 13 --gui-scale 4 --out /tmp/try.png    # look at the PNG
+agent-lens mc chat /punish history Notch && agent-lens mc expect --screen History
+agent-lens mc screen --brief                           # titles and item names, as text
+agent-lens mc shot menu+tooltip --item Notch --gui-scale 4 --out /tmp/try.png    # prints the tooltip lines
 #    then put the steps into scenes/history.json
 
 # 2. base build: check out the target branch, build, deploy to the test server, then

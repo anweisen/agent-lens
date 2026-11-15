@@ -94,7 +94,7 @@ final class ResourcePackApi {
   }
 
   /** Returns when the reload overlay is gone. The game deselects a pack that fails to load. */
-  private static void reload(Minecraft minecraft, String id, long timeoutMs) {
+  static void reload(Minecraft minecraft, String id, long timeoutMs) {
     CompletableFuture<?> reload = ClientThread.call(() -> (CompletableFuture<?>) minecraft.reloadResourcePacks());
     ClientThread.awaitUntil(() -> minecraft.gui.overlay() == null
       && (reload.isDone() || id != null && !id.equals(selected(minecraft))), timeoutMs, "the resource reload");

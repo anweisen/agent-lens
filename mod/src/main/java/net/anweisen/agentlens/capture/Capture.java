@@ -40,6 +40,15 @@ public final class Capture {
     Map<String, Rect> regions = new LinkedHashMap<>();
     regions.put("full", new Rect(0, 0, window.getWidth(), window.getHeight()));
     regions.putAll(Regions.current());
+    // Content that fits the window but hangs over an edge (a tooltip the game pushed against it: only its
+    // transparent margin is outside) is trimmed by the same amount on the opposite side, so it stays centred.
+    Regions.overflow().forEach((name, drawn) -> {
+      if (drawn.w() > window.getWidth() || drawn.h() > window.getHeight()) return;
+      int cutX = Math.max(Math.max(0, -drawn.x()), Math.max(0, drawn.right() - window.getWidth()));
+      int cutY = Math.max(Math.max(0, -drawn.y()), Math.max(0, drawn.bottom() - window.getHeight()));
+      Rect trimmed = new Rect(drawn.x() + cutX, drawn.y() + cutY, drawn.w() - 2 * cutX, drawn.h() - 2 * cutY);
+      if (!trimmed.isEmpty()) regions.put(name, trimmed);
+    });
     Screen screen = minecraft.gui.screen();
     if (screen == null) {
       regions.remove(Regions.SCREEN);
@@ -83,6 +92,11 @@ public final class Capture {
       AbstractContainerScreen<?> container = Screens.requireContainer();
       return Screens.toPixels(Screens.slotRect(container, Screens.slot(container, number(name, 5))));
     }
+    if (name.startsWith("item:")) {
+      AbstractContainerScreen<?> container = Screens.requireContainer();
+      int index = Screens.slotByItem(container, name.substring(5));
+      return Screens.toPixels(Screens.slotRect(container, Screens.slot(container, index)));
+    }
     if (name.startsWith("slots:")) {
       AbstractContainerScreen<?> container = Screens.requireContainer();
       String[] range = name.substring(6).split("-");
@@ -103,9 +117,23 @@ public final class Capture {
     if (rect == null) {
       List<String> known = new ArrayList<>(regions.keySet());
       throw new ApiException(404, "region \"" + name + "\" is not on screen in this frame, available: " + known
-        + " (plus slot:<n>, slots:<a>-<b>, widget:<label> on an open screen, or {x, y, w, h})");
+        + " (plus slot:<n>, slots:<a>-<b>, item:<name>, widget:<label> on an open screen, or {x, y, w, h})");
     }
     return rect;
+  }
+
+  /** The measured regions a spec names ("screen+tooltip" counts as both); slots, widgets and rects are not. */
+  public static java.util.Set<String> names(JsonElement spec) {
+    java.util.Set<String> names = new java.util.LinkedHashSet<>();
+    if (spec == null || spec.isJsonNull() || spec.isJsonObject()) return names;
+    for (JsonElement element : spec.isJsonArray() ? spec.getAsJsonArray() : List.of(spec)) {
+      if (!element.isJsonPrimitive()) continue;
+      String name = element.getAsString();
+      if (name.equals("full") || name.contains(":")) continue;
+      if (name.equals("screen+tooltip")) names.addAll(List.of(Regions.SCREEN, "tooltip"));
+      else names.add(name);
+    }
+    return names;
   }
 
   private static int number(String text, int offset) {
@@ -119,8 +147,19 @@ public final class Capture {
   /** Grabs a frame and resolves the region against exactly that frame. API thread. */
   public static Shot shot(JsonElement region, int pad) {
     CompletableFuture<Rect> rect = new CompletableFuture<>();
-    Frame frame = grabWith(regions -> rect.complete(resolve(region, regions)), rect);
-    Rect resolved = ClientThread.await(rect, 1000, "the region").pad(pad).clamp(frame.width(), frame.height());
+    boolean[] atEdge = {false};
+    Frame frame = grabWith(regions -> {
+      atEdge[0] = !java.util.Collections.disjoint(names(region), Regions.overflow().keySet());
+      rect.complete(resolve(region, regions));
+    }, rect);
+    Rect padded = ClientThread.await(rect, 1000, "the region").pad(pad);
+    if (atEdge[0]) {
+      // the padding of a region lying against the window edge shrinks on both sides alike
+      int cutX = Math.max(Math.max(0, -padded.x()), Math.max(0, padded.right() - frame.width()));
+      int cutY = Math.max(Math.max(0, -padded.y()), Math.max(0, padded.bottom() - frame.height()));
+      padded = new Rect(padded.x() + cutX, padded.y() + cutY, padded.w() - 2 * cutX, padded.h() - 2 * cutY);
+    }
+    Rect resolved = padded.clamp(frame.width(), frame.height());
     if (resolved.isEmpty()) throw ApiException.bad("region is empty after clamping to the frame");
     return new Shot(frame, resolved);
   }

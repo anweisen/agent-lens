@@ -25,6 +25,7 @@ public final class Regions {
   private static final ArrayDeque<String> OPEN = new ArrayDeque<>();
   private static Map<String, int[]> building = new HashMap<>();
   private static Map<String, Rect> current = Map.of();
+  private static Map<String, Rect> overflow = Map.of();
   private static boolean published;
   private static final Map<String, Seen> LAST_SEEN = new HashMap<>();
 
@@ -73,26 +74,40 @@ public final class Regions {
     var window = Minecraft.getInstance().getWindow();
     int scale = window.getGuiScale();
     Map<String, Rect> rects = new LinkedHashMap<>();
+    Map<String, Rect> cut = new LinkedHashMap<>();
     long frame = ClientThread.frame() + 1;
     building.forEach((name, box) -> {
-      Rect rect = new Rect(box[0], box[1], box[2] - box[0], box[3] - box[1]).scale(scale)
-        .clamp(window.getWidth(), window.getHeight());
+      Rect drawn = new Rect(box[0], box[1], box[2] - box[0], box[3] - box[1]).scale(scale);
+      Rect rect = drawn.clamp(window.getWidth(), window.getHeight());
       if (rect.isEmpty()) return;
+      if (!rect.equals(drawn)) cut.put(name, drawn);
       rects.put(name, rect);
       LAST_SEEN.put(name, new Seen(rect, frame));
     });
     current = rects;
+    overflow = cut;
     published = true;
   }
 
   public static void frameEnd() {
-    if (!published) current = Map.of();
+    if (!published) {
+      current = Map.of();
+      overflow = Map.of();
+    }
     published = false;
   }
 
   /** Regions drawn in the frame that just completed, in framebuffer pixels. */
   public static Map<String, Rect> current() {
     return current;
+  }
+
+  /**
+   * Regions of the frame that just completed whose content reaches beyond the window, with their unclamped
+   * bounds: a picture of them would be cut off.
+   */
+  public static Map<String, Rect> overflow() {
+    return overflow;
   }
 
   public static Seen lastSeen(String name) {

@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { camel, splitArgs, typed as typedValue } from '../core/args.mjs';
-import { printResult } from '../core/format.mjs';
+import { printResult, printable } from '../core/format.mjs';
 import { APP, envVar, expandHome } from '../core/paths.mjs';
 import { readClient, readModState } from '../core/state.mjs';
 import { getSession } from './auth.mjs';
@@ -39,7 +39,12 @@ export const COMMANDS = {
   screen: { method: 'GET' },
   hud: { method: 'GET' },
   regions: { method: 'GET' },
+  texts: { method: 'GET' },
   capture: { many: 'region' },
+  // capture with defaults for evidence: a target instead of regions, hover by item name, content never cut off
+  shot: { positionals: ['target'], endpoint: 'capture' },
+  // checked by the CLI against /screen and /hud, no endpoint of its own
+  expect: { local: true },
   frames: { many: 'region' },
   compose: {},
   record: { positionals: ['action'] },
@@ -48,15 +53,20 @@ export const COMMANDS = {
 const NESTED = ['hover', 'create', 'fixed', 'window'];
 // never auto-typed: "42" stays a string
 const STRINGS = new Set(['text', 'world', 'match', 'widget', 'key', 'out', 'before', 'after', 'server', 'label',
-  'path']);
+  'path', 'item', 'screen', 'chat', 'target']);
 const FILES = ['out', 'before', 'after'];
 // consumed by the CLI, never sent
-const CLI_FLAGS = new Set(['json', 'restart', 'force', 'no-start', 'http-timeout']);
+const CLI_FLAGS = new Set(['json', 'restart', 'force', 'no-start', 'http-timeout', 'brief']);
 
 const typed = (key, raw) => typedValue(key, raw, STRINGS);
 
 export function bodyFromArgs(name, argv) {
   const spec = COMMANDS[name];
+  // "--chat" is a switch for capture; for expect it takes a pattern, spaces included
+  if (name === 'expect') {
+    argv = argv.flatMap((arg, index) => (arg === '--chat' && argv[index + 1] !== undefined
+      ? [`--chat=${argv[index + 1]}`] : argv[index - 1] === '--chat' ? [] : [arg]));
+  }
   const { flags, positionals } = splitArgs(argv);
   const cli = {};
   const body = {};
@@ -103,6 +113,119 @@ export function bodyFromStep(name, value) {
   const field = spec.rest || spec.many || spec.positionals?.[0];
   if (!field) throw new Error(`"${name}" takes an object, not ${JSON.stringify(value)}`);
   return { [field]: value };
+}
+
+// "shot" targets -> capture regions. Anything else is taken as a region name (chat, actionbar, sidebar, ...).
+const SHOT_TARGETS = { menu: 'screen', tooltip: 'tooltip', 'menu+tooltip': ['screen', 'tooltip'] };
+
+// A shot is a capture: {target, item | slot | widget, ...} -> {region, hover, fit, pad, ...}.
+export function shotBody({ target = 'menu', item, slot, widget, text, ...rest }) {
+  const hover = rest.hover
+    ?? (item !== undefined ? { item: String(item) } : slot !== undefined ? { slot } : widget !== undefined
+      ? { widget } : text !== undefined ? { text: String(text) } : undefined);
+  let region = SHOT_TARGETS[target] ?? target;
+  if (target === 'item') {
+    if (hover?.item === undefined && hover?.slot === undefined) {
+      throw new Error('shot item: needs --item <name> or --slot <n> (the slot and its tooltip are captured)');
+    }
+    region = [hover.item !== undefined ? `item:${hover.item}` : `slot:${hover.slot}`, 'tooltip'];
+  }
+  return { fit: true, pad: 8, ...rest, region, ...(hover ? { hover } : {}) };
+}
+
+const pattern = text => {
+  try {
+    return new RegExp(text, 'iu');
+  } catch {
+    return new RegExp(String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
+  }
+};
+// Text for reading and matching: no legacy formatting codes, and no private-use characters (a server pack maps
+// them to GUI textures; a menu title can be kilobytes of them before the words).
+const plain = text => String(text ?? '').replace(/\u00a7./g, '')
+  .replace(/[\ue000-\uf8ff\u{f0000}-\u{10ffff}]+/gu, '').trim();
+const simpleClass = name => String(name ?? '').split('.').pop();
+
+// One round of checks against the current state; returns the list of unmet conditions as text.
+async function expectOnce(context, body) {
+  const misses = [];
+  const seen = {};
+  const screen = await context.call('GET', '/screen');
+  const title = screen.class ? plain(screen.title) : null;
+  seen.screen = screen.class ? `${title} (${simpleClass(screen.class)})` : null;
+  if (body.noScreen && screen.class) misses.push(`expected no screen, open: ${seen.screen}`);
+  if (body.screen !== undefined) {
+    const wanted = pattern(body.screen);
+    if (!screen.class) misses.push(`expected screen /${body.screen}/, no screen is open`);
+    else if (!wanted.test(title) && !wanted.test(screen.class)) {
+      misses.push(`expected screen /${body.screen}/, open: ${seen.screen}`);
+    }
+  }
+  const items = (screen.slots || []).filter(slot => slot.item).map(slot => ({ index: slot.index,
+    name: plain(slot.item.name), tooltip: (slot.item.tooltip || []).map(plain), player: Boolean(slot.player) }));
+  if (body.item !== undefined) {
+    const wanted = pattern(body.item);
+    const found = items.filter(item => wanted.test(item.name));
+    if (found.length) seen.item = found.map(item => `${item.index} ${item.name}`).join(', ');
+    else {
+      const named = items.filter(item => item.name);
+      const names = (named.some(item => !item.player) ? named.filter(item => !item.player) : named)
+        .map(item => `${item.index} ${item.name}`);
+      misses.push(`expected an item /${body.item}/, items: ${names.join(', ') || 'none'}`);
+    }
+    if (body.tooltip !== undefined && found.length) {
+      const line = pattern(body.tooltip);
+      const hit = found.find(item => item.tooltip.some(text => line.test(text)));
+      if (hit) seen.tooltip = hit.tooltip.find(text => line.test(text));
+      else misses.push(`expected a tooltip line /${body.tooltip}/ on ${seen.item}, lines: `
+        + JSON.stringify(found[0].tooltip));
+    }
+  } else if (body.tooltip !== undefined) {
+    misses.push('"tooltip" needs "item": the tooltip lines of that item are searched');
+  }
+  if (body.widget !== undefined) {
+    const wanted = pattern(body.widget);
+    const labels = (screen.widgets || []).map(widget => plain(widget.label)).filter(Boolean);
+    const found = labels.find(label => wanted.test(label));
+    if (found) seen.widget = found;
+    else misses.push(`expected a widget /${body.widget}/, widgets: ${labels.join(' | ') || 'none'}`);
+  }
+  if (body.text !== undefined) {
+    const wanted = pattern(body.text);
+    const { texts } = await context.call('GET', '/texts');
+    const all = [...new Set(texts.map(entry => plain(entry.text)).filter(Boolean))];
+    const found = all.find(text => wanted.test(text));
+    if (found) seen.text = found;
+    else misses.push(`expected text /${body.text}/ on screen, texts: ${JSON.stringify(all.slice(0, 30))}`);
+  }
+  if (body.chat !== undefined) {
+    const wanted = pattern(body.chat);
+    const hud = await context.call('GET', '/hud', { lines: Number(body.lines) || 20 });
+    const lines = (hud.chat?.lines || []).map(plain);
+    const found = lines.findLast(line => wanted.test(line));
+    if (found) seen.chat = found;
+    else misses.push(`expected a chat line /${body.chat}/, last lines: ${JSON.stringify(lines.slice(-5))}`);
+  }
+  return { misses, seen };
+}
+
+// Polls until every condition holds, so it also replaces a wait. Fails with what is there instead: text the
+// caller can act on without a screenshot.
+async function expect(context, body) {
+  const known = ['screen', 'noScreen', 'item', 'tooltip', 'widget', 'chat', 'text', 'lines', 'timeoutMs'];
+  const unknown = Object.keys(body).filter(key => !known.includes(key));
+  if (unknown.length) throw new Error(`expect: unknown field ${unknown.join(', ')} (${known.join(', ')})`);
+  if (!known.slice(0, 7).some(key => body[key] !== undefined)) {
+    throw new Error('expect: give at least one of --screen, --no-screen, --item, --widget, --chat, --text');
+  }
+  const timeoutMs = body.timeoutMs === undefined ? 5000 : Number(body.timeoutMs);
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const { misses, seen } = await expectOnce(context, body);
+    if (!misses.length) return seen;
+    if (Date.now() >= deadline) throw new ApiError(printable(`${misses.join('; ')} (after ${timeoutMs} ms)`));
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
 }
 
 async function request(base, method, apiPath, body, timeoutMs = 300_000) {
@@ -190,7 +313,10 @@ export function createContext(config, { restart = false, force = false, noStart 
       if (name === 'resourcepack' && typeof body.path === 'string') body.path = packPath(body.path);
       if (typeof body.out === 'string') fs.mkdirSync(path.dirname(body.out), { recursive: true });
       if (name === 'connect') return connect(context, body, force);
-      const result = await context.call(spec.method || 'POST', `/${name}`, body, { autoStart: !spec.noStart });
+      if (name === 'expect') return expect(context, body);
+      if (name === 'shot') body = shotBody(body);
+      const result = await context.call(spec.method || 'POST', `/${spec.endpoint || name}`, body,
+        { autoStart: !spec.noStart });
       return name === 'record' && body.action === 'stop' ? muxRecording(config, result) : result;
     },
   };
@@ -292,6 +418,52 @@ export async function runApiCommand(config, name, argv) {
     const call = context.call;
     context.call = (method, apiPath, payload, extra = {}) => call(method, apiPath, payload, { ...extra, ...options });
   }
-  printResult(await context.run(name, body), cli.json);
+  const result = await context.run(name, body);
+  if (cli.json) printResult(result, true);
+  else if (name === 'shot') console.log(shotText(result));
+  else if (name === 'screen' && cli.brief) console.log(briefScreen(result));
+  else printResult(result, false);
   return 0;
+}
+
+// What a shot shows, as text: enough to check the picture without opening it.
+export function shotText(result) {
+  const lines = [`${result.file}  ${result.width}x${result.height}  guiScale ${result.guiScale}`];
+  if (result.fitted) lines.push(`fitted: the window was ${result.fitted.w}x${result.fitted.h} for this shot`);
+  if (result.clipped) {
+    lines.push(`CLIPPED: ${result.clipped.join(', ')} reaches beyond the window, the picture is cut off `
+      + '(lower --gui-scale)');
+  }
+  if (result.hovered) {
+    lines.push(`hovered: slot ${result.hovered.slot}${result.hovered.name ? ` ${result.hovered.name}` : ' (empty)'}`);
+    for (const line of result.hovered.tooltip || []) lines.push(`  | ${plain(line)}`);
+  } else if (result.tooltipText?.length) {
+    lines.push('tooltip:');
+    for (const line of result.tooltipText) lines.push(`  | ${plain(line)}`);
+  }
+  return lines.map(printable).join('\n');
+}
+
+// screen --brief: title, widget labels and the container's named items, one per line.
+export function briefScreen(screen) {
+  if (!screen.class) return 'no screen';
+  const lines = [`${plain(screen.title) || '(no title)'}  (${simpleClass(screen.class)})`];
+  const labels = (screen.widgets || []).map(widget => plain(widget.label)).filter(Boolean);
+  if (labels.length) lines.push(`widgets: ${labels.join(' | ')}`);
+  const filled = (screen.slots || []).filter(slot => slot.item);
+  const container = filled.filter(slot => !slot.player);
+  // the player's own inventory screen has nothing else to show
+  const own = container.length ? container : filled;
+  const groups = new Map();
+  for (const slot of own) {
+    const name = plain(slot.item.name);
+    // unnamed filler (panes named " ") says nothing
+    if (!name) continue;
+    const key = `${name}${slot.item.count > 1 ? ` x${slot.item.count}` : ''}`;
+    groups.set(key, [...(groups.get(key) || []), slot.index]);
+  }
+  for (const [name, indexes] of groups) lines.push(`${indexes.join(',').padStart(3)}  ${name}`);
+  const hidden = filled.length - own.length;
+  if (hidden) lines.push(`(${hidden} items in the player inventory not shown)`);
+  return lines.map(printable).join('\n');
 }

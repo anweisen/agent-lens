@@ -83,6 +83,19 @@ final class GameApi {
     return json;
   }
 
+  static final int MAX_WINDOW_W = 7680;
+  static final int MAX_WINDOW_H = 4320;
+
+  /** API thread. Returns once the window and the main render target have the new size. */
+  static void resizeWindow(int width, int height) {
+    Minecraft minecraft = Minecraft.getInstance();
+    ClientThread.run(() -> minecraft.getWindow().setWindowed(width, height));
+    ClientThread.awaitUntil(() -> minecraft.getWindow().getWidth() == width
+      && minecraft.getWindow().getHeight() == height
+      && minecraft.gameRenderer.mainRenderTarget().width == width
+      && minecraft.gameRenderer.mainRenderTarget().height == height, 10_000, "the window to resize");
+  }
+
   static JsonElement settings(JsonObject body) {
     Minecraft minecraft = Minecraft.getInstance();
     if (Json.has(body, "guiScale")) {
@@ -100,11 +113,26 @@ final class GameApi {
       if (width < 320 || height < 240 || width > 7680 || height > 4320) {
         throw ApiException.bad("window needs w (320-7680) and h (240-4320)");
       }
-      ClientThread.run(() -> minecraft.getWindow().setWindowed(width, height));
-      ClientThread.awaitUntil(() -> minecraft.getWindow().getWidth() == width
-        && minecraft.getWindow().getHeight() == height
-        && minecraft.gameRenderer.mainRenderTarget().width == width
-        && minecraft.gameRenderer.mainRenderTarget().height == height, 10_000, "the window to resize");
+      resizeWindow(width, height);
+    }
+    if (Json.has(body, "language")) {
+      String code = Json.require(body, "language").toLowerCase(java.util.Locale.ROOT);
+      boolean changed = ClientThread.call(() -> {
+        var languages = minecraft.getLanguageManager();
+        if (languages.getLanguage(code) == null) {
+          throw ApiException.bad("unknown language \"" + code + "\": a language code such as en_us or de_de");
+        }
+        if (code.equals(languages.getSelected())) return false;
+        languages.setSelected(code);
+        minecraft.options.languageCode = code;
+        return true;
+      });
+      if (changed) {
+        // as the language screen does: reload the translations, then save, which also tells the server
+        ResourcePackApi.reload(minecraft, null, 120_000);
+        ClientThread.run(() -> minecraft.options.save());
+        ClientThread.awaitFrames(2);
+      }
     }
     if (Json.has(body, "holdHud")) Scene.holdHud = Json.bool(body, "holdHud", false);
     if (Json.has(body, "steadyPlayer")) Scene.steadyPlayer = Json.bool(body, "steadyPlayer", true);
@@ -137,6 +165,7 @@ final class GameApi {
       json.addProperty("guiScale", window.getGuiScale());
       json.addProperty("guiWidth", window.getGuiScaledWidth());
       json.addProperty("guiHeight", window.getGuiScaledHeight());
+      json.addProperty("language", minecraft.getLanguageManager().getSelected());
       json.addProperty("holdHud", Scene.holdHud);
       json.addProperty("steadyPlayer", Scene.steadyPlayer);
       json.addProperty("itemName", Scene.itemName);

@@ -37,7 +37,7 @@ Everything is under `src/main/java/net/anweisen/agentlens/`. Each package has a 
 | `core` | startup, configuration, state file, request activity and idle shutdown | `Lens` |
 | `http` | loopback HTTP server, routing, JSON helpers, error statuses; no game code | `ApiServer`, `ApiException`, `Json` |
 | `api` | the endpoints, one class per group, and the route table | `Api`, `GameApi`, `WorldApi`, `ScreenApi`, `HudApi`, `PlayerApi`, `CaptureApi`, `FramesApi`, `RecordApi`, `ResourcePackApi` |
-| `capture` | frame grab, measured regions, PNG/GIF/sheet/label image work | `Capture`, `Regions`, `Images`, `Gif`, `BitmapFont` |
+| `capture` | frame grab, measured regions, PNG/GIF/sheet/label image work | `Capture`, `Regions`, `Texts`, `Images`, `Gif`, `BitmapFont` |
 | `audio` | sound recording through OpenAL Soft's wave writer, WAV files, level analysis and waveform picture | `Recorder`, `Wav`, `Analysis` |
 | `game` | client-thread access and frame waits, readiness, screen geometry, scene overrides, mixin hooks | `ClientThread`, `Readiness`, `Screens`, `Scene`, `Hooks`, `ChatLog`, `Ticks`, `Determinism` |
 | `util` | reflection on private game members, rectangle type | `Reflect`, `Rect` |
@@ -84,6 +84,7 @@ An `@Inject` handler takes all arguments of its target or none; a prefix does no
 | `game/Ticks` | `Minecraft.clientTickCount` |
 | `game/Hooks`, `api/ScreenApi` | `MouseHandler.xpos`, `ypos`, `lastClick` |
 | `game/Screens` | `AbstractContainerScreen.leftPos`, `topPos`, `imageWidth`, `imageHeight` |
+| `capture/Texts` | `Gui.guiRenderState`; `GuiTextRenderState.font`, `text`, `x`, `y` |
 | `game/Readiness` | `FirstPersonHandsAndItems.mainHandHeight`, `oMainHandHeight`, `offHandHeight`, `oOffHandHeight`; `DownloadedPackSource.manager`, `ServerPackManager.packs` and per pack `promptAccepted`, `removalReason`, `activationStatus` (value `ACTIVE`); `DisconnectedScreen.details`; `ConfirmScreen.yesButton` |
 | `api/HudApi`, `api/WorldApi` | `Hud.overlayMessageString`, `overlayMessageTime`, `title`, `subtitle`, `titleTime`; `BossHealthOverlay.events` |
 | `api/PlayerApi` | `Minecraft.startUseItem()`, `startAttack()`, `missTime`, `rightClickDelay` |

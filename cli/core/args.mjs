@@ -4,7 +4,7 @@
 const BOOLEANS = new Set(['clear', 'none', 'shift', 'ctrl', 'double', 'reset', 'hide-hud', 'hide-hand', 'hide-player',
   'hold-hud', 'steady-player', 'item-name', 'toasts', 'text-cursor', 'chat', 'create', 'create-flat', 'create-creative',
   'deterministic', 'from-now', 'enable', 'json', 'restart', 'force', 'no-start', 'keep-going', 'pixel-diff',
-  'only-changed', 'composite', 'dry-run', 'append']);
+  'only-changed', 'composite', 'dry-run', 'append', 'fit', 'brief', 'no-screen']);
 
 export const camel = text => text.replace(/-([a-z0-9])/g, (_, char) => char.toUpperCase());
 
