@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "lens",
+  "version": "${version}",
+  "name": "lens",
+  "description": "Loopback HTTP API for rendered screenshots (agent-lens).",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["net.anweisen.agentlens.LensMod"]
+  },
+  "mixins": ["lens.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.20.0",
+    "java": ">=25"
+  }
+}

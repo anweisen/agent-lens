@@ -1,0 +1,24 @@
+{
+  "required": true,
+  "package": "net.anweisen.agentlens.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": [
+    "CameraMixin",
+    "EntityRendererMixin",
+    "ChatComponentMixin",
+    "FramerateLimitTrackerMixin",
+    "GameRendererMixin",
+    "GuiGraphicsExtractorMixin",
+    "GuiMixin",
+    "GuiRenderStateMixin",
+    "HudMixin",
+    "MinecraftMixin",
+    "ScreenMixin",
+    "TextCursorUtilsMixin",
+    "ToastManagerMixin",
+    "WindowMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

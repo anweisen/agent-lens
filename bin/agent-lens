@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Runs the CLI with Node 22 or newer: node from PATH when it is new enough, else through mise.
+set -euo pipefail
+# Resolve symlinks: this file is usually linked into a directory on PATH.
+self="$(readlink -f "${BASH_SOURCE[0]}")"
+main="$(dirname "$(dirname "$self")")/cli/main.mjs"
+
+major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
+if [[ "$major" =~ ^[0-9]+$ ]] && ((major >= 22)); then
+  exec node "$main" "$@"
+fi
+mise="$(command -v mise || true)"
+if [[ -z "$mise" && -x "$HOME/.local/bin/mise" ]]; then
+  mise="$HOME/.local/bin/mise"
+fi
+if [[ -n "$mise" ]]; then
+  exec "$mise" x node@22 -- node "$main" "$@"
+fi
+echo "$(basename "$0"): needs Node.js 22 or newer on PATH (found: ${major:-none}), or mise to provide it" >&2
+exit 1

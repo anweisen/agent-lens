@@ -1,0 +1,8 @@
+{
+  "name": "agent-lens-cli",
+  "private": true,
+  "description": "Pins prismarine-auth for the Microsoft login of agent-lens mc. Installed on first use into ~/.cache/agent-lens/node.",
+  "dependencies": {
+    "prismarine-auth": "3.1.1"
+  }
+}

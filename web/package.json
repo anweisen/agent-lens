@@ -1,0 +1,8 @@
+{
+  "name": "agent-lens-web",
+  "private": true,
+  "description": "Pins Playwright for agent-lens web. The Docker image tag is derived from this version.",
+  "dependencies": {
+    "playwright": "1.65.0"
+  }
+}
