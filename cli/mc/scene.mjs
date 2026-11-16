@@ -5,6 +5,7 @@ import path from 'node:path';
 import { splitArgs } from '../core/args.mjs';
 import { APP, expandHome } from '../core/paths.mjs';
 import { COMMANDS, bodyFromStep, createContext } from './api.mjs';
+import { resolveServer } from './servers.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const rectText = rect => (rect ? `${rect.x},${rect.y} ${rect.w}x${rect.h}` : '');
@@ -117,6 +118,16 @@ async function run(config, argv) {
     tool: `${APP} mc scene run`, scene: scene.name, sceneFile: path.resolve(file), createdAt: new Date().toISOString(),
     server: typeof flags.server === 'string' ? flags.server : null, status: 'ok', captures: [], steps: [],
   };
+  // A step before the first connect (settings, resourcepack) may have to start the client: start it with the
+  // session that connect needs, or the connect would have to restart it.
+  const first = scene.steps.find(step => 'connect' in step);
+  if (first) {
+    try {
+      context.startAuth = resolveServer(config, manifest.server ?? bodyFromStep('connect', first.connect).server).auth;
+    } catch {
+      // an unknown server is reported by the connect step itself
+    }
+  }
   let failed = 0;
   for (const [index, step] of scene.steps.entries()) {
     const [name] = Object.keys(step);

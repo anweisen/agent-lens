@@ -263,6 +263,8 @@ export function createContext(config, { restart = false, force = false, noStart 
   const context = {
     config,
     log,
+    // session mode for a client this context has to start before a command names one (set by a scene run)
+    startAuth: null,
     async ensure({ auth, autoStart = true } = {}) {
       let client = readClient();
       const running = client ? client.auth || 'offline' : null;
@@ -284,7 +286,7 @@ export function createContext(config, { restart = false, force = false, noStart 
           const mods = path.join(config.dirs.game, 'mods');
           throw new Error(`no lens mod jar in ${mods} (run mod/install.sh from the repository, or copy the jar there)`);
         }
-        const mode = auth || defaultAuth(config);
+        const mode = auth || context.startAuth || defaultAuth(config);
         const session = mode === 'microsoft' ? await getSession(config) : undefined;
         log(`starting the client (${mode} session${session ? `, account ${session.name}` : ''})`);
         client = await start(config, { session, log });
@@ -315,6 +317,8 @@ export function createContext(config, { restart = false, force = false, noStart 
       if (name === 'connect') return connect(context, body, force);
       if (name === 'expect') return expect(context, body);
       if (name === 'shot') body = shotBody(body);
+      // nothing to leave without a client: a scene that starts with "disconnect" also runs on a stopped one
+      if (name === 'disconnect' && !readClient()) return { wasInWorld: false, running: false };
       const result = await context.call(spec.method || 'POST', `/${spec.endpoint || name}`, body,
         { autoStart: !spec.noStart });
       return name === 'record' && body.action === 'stop' ? muxRecording(config, result) : result;
@@ -326,7 +330,9 @@ export function createContext(config, { restart = false, force = false, noStart 
 // relative to the working directory, not to a scene's output directory; "~/" as in a shell
 export const packPath = file => path.resolve(expandHome(file));
 
-// The session server rate-limits logins ("Failed to log in: Status: 429"), typically right after a client start.
+// The session server rate-limits logins ("Failed to log in: Status: 429"), typically right after a client start;
+// a proxy does the same to quick reconnects ("You are logging in too fast").
+const RATE_LIMITED = /Status: 429|logging in too fast/i;
 const LOGIN_RETRIES = 3;
 const loginRetryMs = () => Number(envVar('LOGIN_RETRY_MS')) || 20_000;
 
@@ -357,9 +363,9 @@ async function connect(context, body, force) {
         { auth: server.auth });
       break;
     } catch (error) {
-      if (!(error instanceof ApiError) || !/Status: 429/.test(error.message) || attempt >= LOGIN_RETRIES) throw error;
+      if (!(error instanceof ApiError) || !RATE_LIMITED.test(error.message) || attempt >= LOGIN_RETRIES) throw error;
       const pause = loginRetryMs();
-      context.log(`login rate-limited (429), retry ${attempt + 1} of ${LOGIN_RETRIES} in ${pause / 1000} s`);
+      context.log(`login rate-limited, retry ${attempt + 1} of ${LOGIN_RETRIES} in ${pause / 1000} s`);
       await new Promise(resolve => setTimeout(resolve, pause));
     }
   }

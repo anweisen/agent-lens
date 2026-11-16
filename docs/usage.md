@@ -228,8 +228,9 @@ servers that fit the session of the running client). Do not add production.
 - `microsoft`: a real account from the login cache. `connect staging` starts the client that way. If a client with
   the other session is running, the command fails and names `--restart`, which stops and restarts the client.
 
-Right after a Microsoft-session start the session server can refuse the login (`Failed to log in: Status: 429`).
-`connect` retries that up to three times, 20 s apart, and says so on stderr.
+Right after a Microsoft-session start the session server can refuse the login (`Failed to log in: Status: 429`),
+and a proxy refuses quick reconnects ("You are logging in too fast"). `connect` retries both up to three times,
+20 s apart, and says so on stderr; this holds for a scene's `connect` step too.
 
 ## Account
 
@@ -361,14 +362,19 @@ agent-lens mc scene run scenes/history.json --out evidence/before --server dev
 # 3. PR build: check out the PR branch, build, deploy to the test server, then
 agent-lens mc scene run scenes/history.json --out evidence/after --server dev
 
-# 4. pair up, look at the composites before publishing them
-agent-lens mc scene compare --before evidence/before --after evidence/after --out evidence/compare
+# 4. into the pull request: a Vorher/Nachher table at the end of the description
 agent-lens mc stop
+agent-lens pr evidence --repo owner/name --pr 42 --before evidence/before --after evidence/after
 
-# 5. into the pull request
-agent-lens pr upload --repo owner/name --pr 42 --compare evidence/compare --only-changed > table.md
-agent-lens pr comment --repo owner/name --pr 42 --body-file table.md
+# later, when the change was reworked: only step 3 again, then
+agent-lens pr evidence --repo owner/name --pr 42 --after evidence/after     # replaces the Nachher cells only
 ```
+
+"Before" is the target branch and does not change while the pull request is open: record it once. `scene compare`
+is for looking at pairs locally (stitched image, `same`/`changed`); the table needs neither it nor its output.
+A route scene shared by several evidence scenes should set what it depends on in its first steps
+(`{"settings": {"language": "de_de"}}` before `connect`) instead of relying on what the last run left behind,
+and a scene may start with `{"disconnect": {}}` on a stopped client: the step is a no-op then.
 
 Singleplayer variant (client-side or datapack-level changes, or a plugin that is not involved): replace the
 connect step by `{"singleplayer": {"world": "evidence", "create": {"flat": true, "creative": true}}}` and drop

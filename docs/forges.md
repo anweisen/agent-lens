@@ -14,8 +14,17 @@ agent-lens pr upload  --repo owner/name --pr 42 --compare evidence/compare [--on
 agent-lens pr comment --repo owner/name --pr 42 --body-file table.md
 agent-lens pr description --repo owner/name --pr 42 --body-file table.md --append
 agent-lens pr table --compare evidence/compare                  # the table with local paths, no forge involved
+agent-lens pr evidence --repo owner/name --pr 42 --before evidence/before --after evidence/after   # first time
+agent-lens pr evidence --repo owner/name --pr 42 --after evidence/after                            # every rerun
 ```
 
+- **`evidence` keeps one before/after table in the description up to date** and is the short way for a pull
+  request whose "after" changes again: it takes the capture directories of `mc scene run` (or single files)
+  directly, with no compare step and no stitched image. Without a `| Vorher | Nachher |` table in the description
+  it uploads both sides and appends the table (one pair: two columns; several: a name column first). With a table
+  it uploads only the "after" images and replaces only their cells; "before" and every other line stay as they
+  are, so "before" is recorded once. Rows are matched by capture name (the only row takes the only capture);
+  a capture without a row fails before anything is written. `--labels Before,After` for other headings.
 - `--forge <name>` selects an entry of `forges` in the config; with exactly one entry it can be left out.
 - `--dry-run` prints every write (method, URL, headers with the credentials replaced by `<redacted>`, body or
   body size) instead of sending it. Lookups (GET) still run. Run it first.
