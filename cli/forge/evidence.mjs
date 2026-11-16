@@ -13,17 +13,29 @@ function mediaOf(image) {
   return ['.mp4', '.wav'].map(extension => stem + extension).find(file => fs.existsSync(file)) ?? null;
 }
 
-// A file or a directory of captures -> [{name, file, media}]; name is the capture name both sides share.
+// The text a capture showed, from the manifest "mc scene run" writes next to it: the hovered item's tooltip.
+function textsOf(dir) {
+  const manifest = path.join(dir, 'manifest.json');
+  if (!fs.existsSync(manifest)) return {};
+  const { captures = [] } = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+  return Object.fromEntries(captures.filter(capture => capture.hovered?.tooltip?.length)
+    .map(capture => [capture.file, capture.hovered.tooltip.join('\n')]));
+}
+
+// A file or a directory of captures -> [{name, file, media, text}]; name is the capture name both sides share.
 export function captures(input, side) {
   if (!fs.existsSync(input)) throw new Error(`${input} does not exist`);
-  const files = fs.statSync(input).isDirectory()
+  const isDir = fs.statSync(input).isDirectory();
+  const texts = isDir ? textsOf(input) : textsOf(path.dirname(input));
+  const files = isDir
     ? fs.readdirSync(input).filter(name => isImage(name) && !/\.(compare|diff)\.\w+$/.test(name)).sort()
       .map(name => path.join(input, name))
     : [input];
   if (!files.length) throw new Error(`${input} holds no image`);
   return files.map(file => {
     const stem = path.basename(file, path.extname(file));
-    return { name: stem.replace(new RegExp(`\\.${side}(-\\d+)?$`), ''), file, media: mediaOf(file) };
+    return { name: stem.replace(new RegExp(`\\.${side}(-\\d+)?$`), ''), file, media: mediaOf(file),
+      text: texts[path.basename(file)] ?? null };
   });
 }
 
@@ -96,6 +108,15 @@ export function newTable(labels, pairs, urls) {
   }
   return [`| | ${beforeLabel} | ${afterLabel} |`, '|---|---|---|', ...pairs.map(({ before, after }) =>
     `| \`${after.name}\` | ${cellOf(beforeLabel, before, urls)} | ${cellOf(afterLabel, after, urls)} |`)].join('\n');
+}
+
+// Pairs whose two sides show the same thing: identical image bytes, or the same tooltip text. Either means "before"
+// and "after" ran the same build (a stale jar, a checkout on the wrong branch), not that nothing changed.
+export function unchangedPairs(pairs) {
+  return pairs.filter(({ before, after }) =>
+    (before.text !== null && before.text === after.text)
+    || fs.readFileSync(before.file).equals(fs.readFileSync(after.file)))
+    .map(({ after }) => after.name);
 }
 
 export function pairUp(befores, afters) {

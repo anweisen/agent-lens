@@ -25,6 +25,10 @@ agent-lens pr evidence --repo owner/name --pr 42 --after evidence/after         
   it uploads only the "after" images and replaces only their cells; "before" and every other line stay as they
   are, so "before" is recorded once. Rows are matched by capture name (the only row takes the only capture);
   a capture without a row fails before anything is written. `--labels Before,After` for other headings.
+  **It refuses a pair whose sides look the same**: identical image bytes, or the same hovered tooltip text (read
+  from the `manifest.json` of `mc scene run`). That is almost always both sides running one build (a stale jar, a
+  checkout on the wrong branch), so nothing is written. `--allow-unchanged` for a change that is not in the text
+  (an icon, a colour). On a rerun `--before` is optional and only feeds this check.
 - `--forge <name>` selects an entry of `forges` in the config; with exactly one entry it can be left out.
 - `--dry-run` prints every write (method, URL, headers with the credentials replaced by `<redacted>`, body or
   body size) instead of sending it. Lookups (GET) still run. Run it first.

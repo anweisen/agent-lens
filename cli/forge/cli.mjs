@@ -5,7 +5,7 @@ import { parseArgs } from 'node:util';
 import { loadConfig } from '../core/config.mjs';
 import { APP } from '../core/paths.mjs';
 import { openForge, providerTypes, uploadAll } from './index.mjs';
-import { applyUpdate, captures, cellOf, newTable, pairUp, planUpdate, uploadsOf } from './evidence.mjs';
+import { applyUpdate, captures, cellOf, newTable, pairUp, planUpdate, unchangedPairs, uploadsOf } from './evidence.mjs';
 import { filesOf, loadCompare, renderTable } from './table.mjs';
 
 const HELP = `usage: ${APP} pr <command>
@@ -30,7 +30,9 @@ const HELP = `usage: ${APP} pr <command>
         keep the before/after table of the description up to date: when it has one, only the "after" images
         are uploaded and only their cells are replaced ("before" stays as it is); when it has none, --before
         is needed and the table is appended. Takes capture files or "mc scene run" directories, pairs by
-        file name; needs no compare step and no stitched image
+        file name; needs no compare step and no stitched image. Refuses a pair whose two sides have the same
+        tooltip text (from the scene manifest) or identical image bytes, the sign of both sides running one build;
+        --allow-unchanged for a change that is not in the text. On a rerun, --before only feeds this check
 
   common: --forge <name>  a forge of the config ("forges"); optional when exactly one is configured
           --dry-run       print every write request (method, URL, headers without secrets, body) instead of
@@ -47,7 +49,7 @@ const OPTIONS = {
   'pr-id': { type: 'string' }, 'body-file': { type: 'string' }, compare: { type: 'string' }, urls: { type: 'string' },
   before: { type: 'string' }, after: { type: 'string' }, labels: { type: 'string' },
   composite: { type: 'boolean' }, 'only-changed': { type: 'boolean' }, append: { type: 'boolean' },
-  'dry-run': { type: 'boolean' }, json: { type: 'boolean' },
+  'dry-run': { type: 'boolean' }, json: { type: 'boolean' }, 'allow-unchanged': { type: 'boolean' },
 };
 
 function bodyFile(flags, command) {
@@ -132,6 +134,14 @@ async function run(command, flags, positionals) {
         throw new UsageError(`the description has no "| ${labels[0]} | ${labels[1]} |" table yet: pass --before <file|dir>`);
       }
       const pairs = plan ? null : pairUp(befores, afters);
+      // On a rerun --before is optional and only feeds this check.
+      const checked = pairs ?? (befores ? pairUp(befores, afters) : []);
+      const unchanged = unchangedPairs(checked);
+      if (unchanged.length && !flags['allow-unchanged']) {
+        throw new UsageError(`before and after show the same for ${unchanged.join(', ')} (same tooltip text or `
+          + 'identical image): both sides most likely ran the same build. Check which build each side ran; '
+          + '--allow-unchanged when the change is not in the text (an icon, a colour)');
+      }
       const files = plan ? uploadsOf(afters, 'after')
         : [...uploadsOf(pairs.map(pair => pair.before), 'before'), ...uploadsOf(pairs.map(pair => pair.after), 'after')];
       const uploaded = await uploadAll(provider, pr, files);
