@@ -305,6 +305,10 @@ Checks before the images go into a PR:
   overflows"): numbers, not eyeballing.
 - Open at least one composite and look at it.
 
+A new page or component has no "before": shoot only the branch, one spec shot per state or viewport (`closed`,
+`open`, `mobile`), and put them in with `agent-lens pr evidence --repo owner/name --pr 42 --new evidence/new`. The
+rows follow the spec's shot order ([forges.md](forges.md)).
+
 ## Troubleshooting
 
 - `selector ... matched nothing`: the element is not there after the actions ran. Add a `waitFor`, or check the

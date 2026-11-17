@@ -387,6 +387,27 @@ scene's `connect` step joins again.
 Checks before publishing: read the PNGs, confirm both runs captured the same names and sizes (`manifest.json`),
 and that `same` / `changed` matches what the change should do.
 
+## Worked example: a new feature
+
+A new menu, command or item has no "before": the target branch shows nothing to compare. Record only the PR build,
+with one capture per perspective or state, named for what it shows, in the order a reviewer should read them:
+
+```sh
+# scenes/warps-new.json: connect, open the menu, shot "menu"; hover an entry, shot "entry-hover";
+# click it, shot "confirm-dialog"; confirm, shot "chat-result"
+agent-lens mc scene run scenes/warps-new.json --out evidence/new --server dev
+agent-lens pr evidence --repo owner/name --pr 42 --new evidence/new
+#   | | Neu |
+#   |---|---|
+#   | `menu` | ![Neu: menu](<url>) |
+#   | `entry-hover` | ...
+```
+
+The rows keep the scene's capture order. Shots from separate commands go in as several `--new <file>` in the
+order wanted. A rerun after a rework replaces the rows of the same names and adds new ones. Two identical shots
+are refused: a state the scene meant to change did not change. A pull request that also changes something
+existing gets its Vorher/Nachher table from a separate `pr evidence --before ... --after ...` run.
+
 ## Pull request upload and config
 
 `agent-lens pr` (OneDev, GitHub, Forgejo/Gitea): [forges.md](forges.md). Config file and environment variables:

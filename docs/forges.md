@@ -16,7 +16,18 @@ agent-lens pr description --repo owner/name --pr 42 --body-file table.md --appen
 agent-lens pr table --compare evidence/compare                  # the table with local paths, no forge involved
 agent-lens pr evidence --repo owner/name --pr 42 --before evidence/before --after evidence/after   # first time
 agent-lens pr evidence --repo owner/name --pr 42 --after evidence/after                            # every rerun
+agent-lens pr evidence --repo owner/name --pr 42 --new evidence/new                                # a new feature
 ```
+
+- **`evidence --new` is for a new feature**, where a "before" would show nothing. It takes one or more shots
+  (`--new` repeats; each is a file or a `mc scene run` / `web shot` directory): several perspectives, states in
+  sequence (closed, open, after a click), viewports. One shot gives a `| Neu |` table, several a `| | Neu |`
+  table with the capture name in the first column. A directory keeps the order its scene took the captures in
+  (else file name order); several `--new` keep the order given. A rerun replaces the rows of the capture names it
+  has and adds rows for new names; every other row and line stays. It refuses two byte-identical shots (a state
+  change that did not happen: a click that missed, a capture taken too early); `--allow-unchanged` when that is
+  intended. A pull request that changes one thing and adds another gets both tables: run `evidence` once with
+  `--before/--after` and once with `--new`. `--labels New` for another heading.
 
 - **`evidence` keeps one before/after table in the description up to date** and is the short way for a pull
   request whose "after" changes again: it takes the capture directories of `mc scene run` (or single files)

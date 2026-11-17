@@ -5,7 +5,10 @@ import { parseArgs } from 'node:util';
 import { loadConfig } from '../core/config.mjs';
 import { APP } from '../core/paths.mjs';
 import { openForge, providerTypes, uploadAll } from './index.mjs';
-import { applyUpdate, captures, cellOf, newTable, pairUp, planUpdate, unchangedPairs, uploadsOf } from './evidence.mjs';
+import {
+  applyUpdate, captures, cellOf, identicalShots, newShots, newTable, pairUp, planUpdate, unchangedPairs, updateNewTable,
+  uploadsOf,
+} from './evidence.mjs';
 import { filesOf, loadCompare, renderTable } from './table.mjs';
 
 const HELP = `usage: ${APP} pr <command>
@@ -33,6 +36,12 @@ const HELP = `usage: ${APP} pr <command>
         file name; needs no compare step and no stitched image. Refuses a pair whose two sides have the same
         tooltip text (from the scene manifest) or identical image bytes, the sign of both sides running one build;
         --allow-unchanged for a change that is not in the text. On a rerun, --before only feeds this check
+  evidence --repo <path> --pr <number> --new <file|dir> [--new <file|dir> ...] [--labels Neu]
+        a new feature, where a "before" shows nothing: one or more shots (perspectives, states) in a "| Neu |"
+        table (a name column first for several). A rerun replaces the rows of the same capture name and adds
+        rows for new names; every other row stays. Refuses two shots with identical bytes (a state change that
+        did not happen); --allow-unchanged when that is intended. Lives beside a before/after table of the
+        same pull request: run evidence once per kind
 
   common: --forge <name>  a forge of the config ("forges"); optional when exactly one is configured
           --dry-run       print every write request (method, URL, headers without secrets, body) instead of
@@ -47,7 +56,8 @@ class UsageError extends Error {}
 const OPTIONS = {
   forge: { type: 'string' }, repo: { type: 'string' }, project: { type: 'string' }, pr: { type: 'string' },
   'pr-id': { type: 'string' }, 'body-file': { type: 'string' }, compare: { type: 'string' }, urls: { type: 'string' },
-  before: { type: 'string' }, after: { type: 'string' }, labels: { type: 'string' },
+  before: { type: 'string' }, after: { type: 'string' }, new: { type: 'string', multiple: true },
+  labels: { type: 'string' },
   composite: { type: 'boolean' }, 'only-changed': { type: 'boolean' }, append: { type: 'boolean' },
   'dry-run': { type: 'boolean' }, json: { type: 'boolean' }, 'allow-unchanged': { type: 'boolean' },
 };
@@ -79,8 +89,17 @@ async function run(command, flags, positionals) {
   let markdown = null;
   let afters = null;
   let befores = null;
-  if (command === 'evidence') {
-    if (!flags.after) throw new UsageError('evidence needs --after <file|dir>');
+  let shots = null;
+  if (command === 'evidence' && flags.new) {
+    if (flags.before || flags.after) throw new UsageError('--new is for a feature with no "before": no --before/--after');
+    shots = newShots(flags.new);
+    const same = identicalShots(shots);
+    if (same.length && !flags['allow-unchanged']) {
+      throw new UsageError(`identical shots: ${same.join(', ')}. Two states that look the same mean the state change `
+        + 'did not happen; --allow-unchanged when that is intended');
+    }
+  } else if (command === 'evidence') {
+    if (!flags.after) throw new UsageError('evidence needs --after <file|dir> (or --new <file|dir> for a new feature)');
     afters = captures(flags.after, 'after');
     befores = flags.before ? captures(flags.before, 'before') : null;
   } else if (command !== 'resolve') {
@@ -126,6 +145,23 @@ async function run(command, flags, positionals) {
       return 0;
     }
     case 'evidence': {
+      if (shots) {
+        const [label, ...extra] = (flags.labels ?? 'Neu').split(',').map(name => name.trim());
+        if (extra.length) throw new UsageError('--labels with --new takes one name: New');
+        const files = uploadsOf(shots, 'new');
+        const uploaded = await uploadAll(provider, pr, files);
+        const urls = Object.fromEntries(files.map(({ file }, index) => [file, uploaded[index].markdownUrl]));
+        const update = updateNewTable(await provider.getDescription(pr), label, shots,
+          shot => cellOf(`${label}: ${shot.name}`, shot, urls));
+        const result = await provider.setDescription(pr, update.markdown);
+        const what = [update.added.length && `added ${update.added.join(', ')}`,
+          update.replaced.length && `replaced ${update.replaced.join(', ')}`].filter(Boolean).join('; ');
+        if (!dryRun) {
+          print({ mode: 'new', added: update.added, replaced: update.replaced, urls, description: result },
+            `${label}: ${what}${result.url ? `: ${result.url}` : ''}`);
+        }
+        return 0;
+      }
       const labels = (flags.labels ?? 'Vorher,Nachher').split(',').map(label => label.trim());
       if (labels.length !== 2) throw new UsageError('--labels takes two names: Before,After');
       const current = await provider.getDescription(pr);
