@@ -261,7 +261,8 @@ not fit at the wanted GUI scale (`fit`), so a long lore or a large menu is never
 | `tooltip` | only the tooltip of `--item NAME` / `--slot N` / `--widget L` / `--text RE` (a chat hover: open the chat first) |
 | `item` | the slot and its tooltip |
 | `menu+tooltip` | panel and tooltip together |
-| anything else | that region: `chat`, `actionbar`, `sidebar`, `title`, `hotbar`, ... |
+| `menu-title` | a container's title as the frame shows it (see below) |
+| anything else | that region: `chat`, `actionbar`, `sidebar`, `title` (the HUD title), `hotbar`, ... |
 
 ```sh
 agent-lens mc shot tooltip --item Minuten --gui-scale 3 --out ev/tooltip.png
@@ -276,6 +277,14 @@ agent-lens mc shot tooltip --item Minuten --gui-scale 3 --out ev/tooltip.png
 The printed lines are what the picture shows: check them instead of opening the PNG, and open only the final
 comparison. `CLIPPED: ...` means the content is larger than the largest window: lower `--gui-scale`. Defaults:
 `--pad 8`, `--fit true`; every `capture` flag works.
+
+**Container titles are measured from the frame.** A resource pack's text shader may draw the title somewhere
+else than its layout says (a title plate lifted above the panel), which no layout bounds show. For a `screen` or
+`menu-title` region the shot renders two more frames, one without the title and one with it again, and takes
+the pixels the title changes (minus those that changed anyway). `screen` grows to include them; `menu-title` is
+exactly them, so its width follows the title's real length. A measured title touching the window edge is
+reported as `CLIPPED: menu-title`. Every capture with an open screen also reports `screenTitle`: the title as
+text without private-use glyphs, what a before/after check compares when a change is in the title.
 
 ## Scenes
 
@@ -327,6 +336,16 @@ agent-lens mc scene run scenes/history.json --out evidence/before --server dev
 ```
 
 The run stops at the first failing step (`FAIL <index> <step> <error>`, exit 1); `--keep-going` runs the rest.
+A failure also prints the last chat lines (the server's answer: no permission, unknown command) and the command
+to resume: fix the step, then `scene run ... --from <index>` continues from where the client stands, keeping the
+earlier captures of the manifest in `--out`. `CLIPPED: <capture> (<region>)` at the end names pictures with
+content cut off.
+
+**Writing a new route: record it, do not write it from the code.** `mc scene record start <scene.json>
+[--include route.json]` turns recording on (state in the state dir); from then on every `mc` action that succeeds
+(`chat`, `click`, `expect`, `wait`, `shot`, ...) is appended as a step, read-only lookups (`screen`, `hud`) are
+not. A command that fails is not recorded, so the file only holds steps that worked against the live server.
+`shot`/`capture` steps take their `name` from `--out`. `scene record stop` ends it; then replay the file.
 `manifest.json` lists every step (`ok`, `ms`, `error`) and per capture the API result (`width`, `height`, `rect`,
 `regions`, `guiScale`).
 

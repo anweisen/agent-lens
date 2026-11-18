@@ -3,8 +3,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { splitArgs } from '../core/args.mjs';
-import { APP, expandHome } from '../core/paths.mjs';
-import { COMMANDS, bodyFromStep, createContext } from './api.mjs';
+import { APP, expandHome, paths } from '../core/paths.mjs';
+import { COMMANDS, bodyFromStep, createContext, plain } from './api.mjs';
 import { resolveServer } from './servers.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -107,12 +107,18 @@ async function run(config, argv) {
   const { flags, positionals } = splitArgs(argv);
   const [file] = positionals;
   if (!file || typeof flags.out !== 'string') {
-    throw new Error(`usage: ${APP} mc scene run <scene.json> --out <dir> [--server <name>] [--keep-going] `
-      + '[--restart] [--force]');
+    throw new Error(`usage: ${APP} mc scene run <scene.json> --out <dir> [--server <name>] [--from <step>] `
+      + '[--keep-going] [--restart] [--force]');
   }
   const scene = loadScene(file);
   const outDir = path.resolve(flags.out);
   fs.mkdirSync(outDir, { recursive: true });
+  // --from N resumes a failed run at step N (numbers as printed, includes expanded): the client is where step N-1
+  // left it, and the captures of the earlier steps stay from the previous manifest in --out
+  const from = flags.from === undefined ? 1 : Number(flags.from);
+  if (!Number.isInteger(from) || from < 1 || from > scene.steps.length) {
+    throw new Error(`--from takes a step number 1-${scene.steps.length}`);
+  }
   const context = createContext(config, { restart: Boolean(flags.restart), force: Boolean(flags.force) });
   const manifest = {
     tool: `${APP} mc scene run`, scene: scene.name, sceneFile: path.resolve(file), createdAt: new Date().toISOString(),
@@ -128,8 +134,23 @@ async function run(config, argv) {
       // an unknown server is reported by the connect step itself
     }
   }
+  if (from > 1) {
+    let previous = null;
+    try {
+      previous = JSON.parse(fs.readFileSync(path.join(outDir, 'manifest.json'), 'utf8'));
+    } catch {
+      // no earlier run in --out: only the steps from here on are recorded
+    }
+    if (previous?.sceneFile === manifest.sceneFile) {
+      manifest.captures = previous.captures.filter(capture => capture.step < from);
+      manifest.steps = previous.steps.filter(entry => entry.index < from && entry.ok);
+    }
+    if (!flags.json) console.log(`resuming at step ${from}, ${manifest.captures.length} earlier capture(s) kept`);
+  }
   let failed = 0;
+  let failedAt = 0;
   for (const [index, step] of scene.steps.entries()) {
+    if (index + 1 < from) continue;
     const [name] = Object.keys(step);
     const began = Date.now();
     const entry = { index: index + 1, step };
@@ -143,6 +164,7 @@ async function run(config, argv) {
           ? `${capture.video ?? capture.audio}  ${capture.durationMs} ms  peak ${capture.peakDb} dB  `
             + `onsets [${capture.onsets.map(onset => onset.ms).join(', ')}]`
           : `${capture.width}x${capture.height}  rect ${rectText(capture.rect)}`
+            + (capture.screenTitle ? `  title ${JSON.stringify(capture.screenTitle)}` : '')
             + (capture.hovered?.name ? `  hovered ${JSON.stringify(capture.hovered.name)}` : '')
             + (capture.clipped ? `  CLIPPED ${capture.clipped.join(',')}` : '');
         if (!flags.json) console.log(`ok   ${index + 1} ${name} ${capture.file}  ${info}`);
@@ -153,6 +175,12 @@ async function run(config, argv) {
       entry.ms = Date.now() - began;
       entry.error = error.message;
       console.error(`FAIL ${index + 1} ${name}  ${error.message}`);
+      if (!failedAt) {
+        failedAt = index + 1;
+        // the server's answer to the last command (no permission, unknown command) is usually the cause
+        const chat = await lastChatLines(context, 5);
+        if (chat.length) console.error(`     chat: ${JSON.stringify(chat)}`);
+      }
     }
     manifest.steps.push(entry);
     if (failed && !flags['keep-going']) break;
@@ -165,7 +193,106 @@ async function run(config, argv) {
     + `${manifest.captures.length} captures -> ${manifestFile}`;
   if (flags.json) console.log(JSON.stringify(manifest, null, 2));
   (flags.json ? console.error : console.log)(summary);
+  const clipped = manifest.captures.filter(capture => capture.clipped?.length);
+  if (clipped.length) {
+    console.error(`CLIPPED: ${clipped.map(capture => `${capture.name} (${capture.clipped.join(',')})`).join(', ')}: `
+      + 'part of the content is cut off in these pictures');
+  }
+  if (failedAt) {
+    const args = [APP, 'mc scene run', JSON.stringify(path.resolve(file)), '--out', JSON.stringify(outDir),
+      ...(manifest.server ? ['--server', manifest.server] : []), '--from', String(failedAt)];
+    console.error(`fix the step, then resume where it stopped: ${args.join(' ')}`);
+  }
   return failed ? 1 : 0;
+}
+
+async function lastChatLines(context, count) {
+  try {
+    const hud = await context.call('GET', '/hud', { lines: count }, { autoStart: false });
+    return (hud.chat?.lines || []).map(plain).filter(Boolean).slice(-count);
+  } catch {
+    return [];
+  }
+}
+
+// scene record: every mc action that succeeds while a recording is on is appended to the scene file, so a new
+// route is written from steps that worked against the live server instead of from reading code.
+export const recordingFile = () => path.join(paths.state, 'scene-recording.json');
+
+export function readRecording() {
+  try {
+    return JSON.parse(fs.readFileSync(recordingFile(), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+// read-only lookups and client control never become steps
+const NOT_RECORDED = new Set(['screen', 'hud', 'regions', 'texts', 'quit', 'compose']);
+
+/** Called after an mc command succeeded; returns the step number it became, or null. */
+export function recordStep(name, body) {
+  const recording = readRecording();
+  if (!recording || NOT_RECORDED.has(name) || !COMMANDS[name]) return null;
+  const value = { ...body };
+  if (name === 'capture' || name === 'shot' || name === 'frames') {
+    if (typeof value.name !== 'string') {
+      if (typeof value.out !== 'string') return null;
+      value.name = path.basename(value.out).replace(/\.[^.]+$/, '');
+    }
+    delete value.out;
+  }
+  let scene = JSON.parse(fs.readFileSync(recording.file, 'utf8'));
+  if (Array.isArray(scene)) scene = { steps: scene };
+  scene.steps.push({ [name]: Object.keys(value).length ? value : true });
+  fs.writeFileSync(recording.file, `${formatScene(scene)}\n`);
+  return scene.steps.length;
+}
+
+// one step per line, as the hand-written scenes are
+const formatScene = scene => `{${Object.entries(scene).map(([key, value]) => (key === 'steps'
+  ? `"steps":[\n${value.map(step => JSON.stringify(step)).join(',\n')}\n]`
+  : `${JSON.stringify(key)}:${JSON.stringify(value)}`)).join(',\n')}}`;
+
+function stepCount(file) {
+  const scene = JSON.parse(fs.readFileSync(file, 'utf8'));
+  return (Array.isArray(scene) ? scene : scene.steps || []).length;
+}
+
+function record(argv) {
+  const { flags, positionals } = splitArgs(argv);
+  const [action, file] = positionals;
+  const current = readRecording();
+  if (action === 'start') {
+    if (!file) throw new Error(`usage: ${APP} mc scene record start <scene.json> [--include <route.json>]`);
+    const target = path.resolve(expandHome(file));
+    if (current && current.file !== target) throw new Error(`already recording into ${current.file}: stop it first`);
+    if (!fs.existsSync(target)) {
+      const steps = typeof flags.include === 'string' ? [{ include: flags.include }] : [];
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, `${formatScene({ name: path.basename(target, '.json'), steps })}\n`);
+    }
+    const count = stepCount(target);
+    fs.mkdirSync(paths.state, { recursive: true });
+    fs.writeFileSync(recordingFile(), JSON.stringify({ file: target, startedAt: new Date().toISOString() }));
+    console.log(`recording into ${target} (${count} step(s) so far): every mc action that succeeds is appended`);
+    return 0;
+  }
+  if (action === 'stop') {
+    if (!current) {
+      console.log('not recording');
+      return 0;
+    }
+    fs.rmSync(recordingFile(), { force: true });
+    const count = stepCount(current.file);
+    console.log(`stopped: ${current.file} has ${count} step(s); replay with ${APP} mc scene run ${current.file} --out <dir>`);
+    return 0;
+  }
+  if (action === 'status' || !action) {
+    console.log(current ? `recording into ${current.file} since ${current.startedAt}` : 'not recording');
+    return 0;
+  }
+  throw new Error(`usage: ${APP} mc scene record start <scene.json> [--include <route.json>] | stop | status`);
 }
 
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -239,5 +366,6 @@ export async function runScene(config, argv, services = {}) {
   const [sub, ...rest] = argv;
   if (sub === 'run') return run(config, rest);
   if (sub === 'compare') return compare(config, rest, services);
-  throw new Error(`usage: ${APP} mc scene run|compare ... (see "${APP} help mc")`);
+  if (sub === 'record') return record(rest);
+  throw new Error(`usage: ${APP} mc scene run|record|compare ... (see "${APP} help mc")`);
 }

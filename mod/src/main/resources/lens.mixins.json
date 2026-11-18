@@ -3,6 +3,7 @@
   "package": "net.anweisen.agentlens.mixin",
   "compatibilityLevel": "JAVA_25",
   "client": [
+    "AbstractContainerScreenMixin",
     "CameraMixin",
     "EntityRendererMixin",
     "ChatComponentMixin",

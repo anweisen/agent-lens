@@ -63,8 +63,11 @@ capture
   record stop       FILE.wav + waveform FILE.png (+ FILE.mp4 with ffmpeg); prints onsets and the sounds played
 
 scenes
-  scene run <scene.json> --out <dir> [--server NAME] [--keep-going] [--restart] [--force]
+  scene run <scene.json> --out <dir> [--server NAME] [--from STEP] [--keep-going] [--restart] [--force]
+          --from resumes a failed run at that step, keeping the earlier captures in --out
           extra steps: {"shot": {"target", "item", "name"}}, {"expect": {...}}, {"include": "route.json"}
+  scene record start <scene.json> [--include route.json] | stop | status
+          while on, every mc action that succeeds is appended to the scene: a route proven step by step
   scene compare --before <dir> --after <dir> --out <dir> [--labels A,B] [--layout L] [--scale N] [--pixel-diff]
 
 escape hatch

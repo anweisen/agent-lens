@@ -21,6 +21,8 @@ public final class Regions {
   }
 
   public static final String SCREEN = "screen";
+  /** A container screen's title; Capture replaces its layout bounds with what the frame shows. */
+  public static final String TITLE = "menu-title";
 
   private static final ArrayDeque<String> OPEN = new ArrayDeque<>();
   private static Map<String, int[]> building = new HashMap<>();

@@ -30,6 +30,8 @@ public final class Scene {
   public static volatile java.util.Set<String> chatShot;
   public static volatile boolean toasts;
   public static volatile boolean textCursor;
+  /** Leaves the container title out of the frame (Capture measures the title from the difference). */
+  public static volatile boolean hideTitle;
 
   private Scene() {
   }

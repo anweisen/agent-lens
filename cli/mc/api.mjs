@@ -142,7 +142,7 @@ const pattern = text => {
 };
 // Text for reading and matching: no legacy formatting codes, and no private-use characters (a server pack maps
 // them to GUI textures; a menu title can be kilobytes of them before the words).
-const plain = text => String(text ?? '').replace(/\u00a7./g, '')
+export const plain = text => String(text ?? '').replace(/\u00a7./g, '')
   .replace(/[\ue000-\uf8ff\u{f0000}-\u{10ffff}]+/gu, '').trim();
 const simpleClass = name => String(name ?? '').split('.').pop();
 
@@ -425,6 +425,9 @@ export async function runApiCommand(config, name, argv) {
     context.call = (method, apiPath, payload, extra = {}) => call(method, apiPath, payload, { ...extra, ...options });
   }
   const result = await context.run(name, body);
+  const { recordStep } = await import('./scene.mjs');
+  const recorded = recordStep(name, body);
+  if (recorded) console.error(`(recorded as step ${recorded})`);
   if (cli.json) printResult(result, true);
   else if (name === 'shot') console.log(shotText(result));
   else if (name === 'screen' && cli.brief) console.log(briefScreen(result));
@@ -440,6 +443,7 @@ export function shotText(result) {
     lines.push(`CLIPPED: ${result.clipped.join(', ')} reaches beyond the window, the picture is cut off `
       + '(lower --gui-scale)');
   }
+  if (result.screenTitle) lines.push(`screen title: ${plain(result.screenTitle)}`);
   if (result.hovered) {
     lines.push(`hovered: slot ${result.hovered.slot}${result.hovered.name ? ` ${result.hovered.name}` : ' (empty)'}`);
     for (const line of result.hovered.tooltip || []) lines.push(`  | ${plain(line)}`);

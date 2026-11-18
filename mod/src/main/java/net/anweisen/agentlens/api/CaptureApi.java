@@ -113,9 +113,17 @@ final class CaptureApi {
           // larger than the window: part of the content is missing from the picture. Hanging over an edge alone
           // is not: a tooltip the game pushed against an edge only loses its transparent margin.
           overflowing(names).forEach((name, drawn) -> {
+            // the title's layout bounds say nothing (a plate's spacing glyphs reach far): it is measured instead
+            if (name.equals(net.anweisen.agentlens.capture.Regions.TITLE)) return;
             if (drawn.w() > window.getWidth() || drawn.h() > window.getHeight()) clipped.add(name);
           });
+          // a measured region (the title a shader lifted) lying against the window edge is cut off as well
+          shot.cut().forEach(name -> {
+            if (!clipped.contains(new com.google.gson.JsonPrimitive(name))) clipped.add(name);
+          });
           if (!clipped.isEmpty()) json.add("clipped", clipped);
+          JsonElement title = ScreenApi.titleText();
+          if (title != null) json.add("screenTitle", title);
         });
         if (previous != null) json.add("fitted", shot.frame().regions().get("full").json());
         if (!json.has("hovered") && shot.frame().regions().containsKey("tooltip")) {

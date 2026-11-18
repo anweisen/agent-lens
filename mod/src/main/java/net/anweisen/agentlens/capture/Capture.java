@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import net.anweisen.agentlens.game.ClientThread;
+import net.anweisen.agentlens.game.Scene;
 import net.anweisen.agentlens.game.Screens;
 import net.anweisen.agentlens.http.ApiException;
 import net.anweisen.agentlens.util.Rect;
@@ -27,7 +28,8 @@ public final class Capture {
   public record Frame(int[] pixels, int width, int height, Map<String, Rect> regions, int guiScale) {
   }
 
-  public record Shot(Frame frame, Rect rect) {
+  /** A picture's frame and rect; cut names the measured regions that reach beyond the window, i.e. are cut off. */
+  public record Shot(Frame frame, Rect rect, List<String> cut) {
   }
 
   private Capture() {
@@ -152,7 +154,27 @@ public final class Capture {
       atEdge[0] = !java.util.Collections.disjoint(names(region), Regions.overflow().keySet());
       rect.complete(resolve(region, regions));
     }, rect);
-    Rect padded = ClientThread.await(rect, 1000, "the region").pad(pad);
+    Rect found = ClientThread.await(rect, 1000, "the region");
+    List<String> cut = new ArrayList<>();
+    java.util.Set<String> names = names(region);
+    if ((names.contains(Regions.SCREEN) || names.contains(Regions.TITLE)) && frame.regions().containsKey(Regions.TITLE)) {
+      Rect drawn = measureTitle(frame);
+      if (drawn != null) {
+        Map<String, Rect> regions = new LinkedHashMap<>(frame.regions());
+        regions.put(Regions.TITLE, drawn);
+        regions.computeIfPresent(Regions.SCREEN, (name, screen) -> screen.union(drawn));
+        regions.computeIfPresent("screen+tooltip", (name, both) -> both.union(drawn));
+        frame = new Frame(frame.pixels(), frame.width(), frame.height(), regions, frame.guiScale());
+        Map<String, Rect> measured = regions;
+        found = ClientThread.call(() -> resolve(region, measured));
+        if (drawn.y() <= 0 || drawn.x() <= 0 || drawn.right() >= frame.width()) cut.add(Regions.TITLE);
+        // the title's layout bounds overflow for no reason (a plate's spacing glyphs): only what was measured counts
+        java.util.Set<String> others = new java.util.HashSet<>(names);
+        others.remove(Regions.TITLE);
+        atEdge[0] = !cut.isEmpty() || !java.util.Collections.disjoint(others, Regions.overflow().keySet());
+      }
+    }
+    Rect padded = found.pad(pad);
     if (atEdge[0]) {
       // the padding of a region lying against the window edge shrinks on both sides alike
       int cutX = Math.max(Math.max(0, -padded.x()), Math.max(0, padded.right() - frame.width()));
@@ -161,7 +183,96 @@ public final class Capture {
     }
     Rect resolved = padded.clamp(frame.width(), frame.height());
     if (resolved.isEmpty()) throw ApiException.bad("region is empty after clamping to the frame");
-    return new Shot(frame, resolved);
+    return new Shot(frame, resolved, cut);
+  }
+
+  /**
+   * Where the container title really is: a resource pack's text shader can move it (a menu title plate lifted
+   * above the panel), which its layout bounds never show. Two more frames, one without the title and one with it
+   * again: the pixels the title changes, minus those that changed anyway (an animated world behind the menu),
+   * near the layout bounds. Null when nothing changed. API thread.
+   */
+  private static Rect measureTitle(Frame shown) {
+    Rect layout = shown.regions().get(Regions.TITLE);
+    Rect panel = shown.regions().getOrDefault(Regions.SCREEN, layout);
+    int scale = Math.max(1, shown.guiScale());
+    int left = Math.max(0, Math.min(layout.x(), panel.x()) - 16 * scale);
+    int right = Math.min(shown.width(), Math.max(layout.right(), panel.right()) + 16 * scale);
+    int top = Math.max(0, layout.y() - 64 * scale);
+    int bottom = Math.min(shown.height(), layout.bottom() + 8 * scale);
+    Frame hidden;
+    ClientThread.run(() -> Scene.hideTitle = true);
+    try {
+      hidden = grab();
+    } finally {
+      ClientThread.run(() -> Scene.hideTitle = false);
+    }
+    Frame again = grab();
+    if (hidden.width() != shown.width() || again.width() != shown.width()
+      || hidden.height() != shown.height() || again.height() != shown.height()) {
+      return null;
+    }
+    int width = shown.width();
+    int rows = bottom - top;
+    int[] rowMin = new int[rows];
+    int[] rowMax = new int[rows];
+    boolean[] changed = new boolean[rows];
+    for (int y = top; y < bottom; y++) {
+      int first = Integer.MAX_VALUE, last = -1, count = 0;
+      for (int x = left; x < right; x++) {
+        int index = y * width + x;
+        int pixel = shown.pixels()[index];
+        if (!differs(pixel, hidden.pixels()[index]) || differs(pixel, again.pixels()[index])) continue;
+        count++;
+        first = Math.min(first, x);
+        last = Math.max(last, x);
+      }
+      // a single pixel is noise (a particle), a title row has more
+      changed[y - top] = count >= 2;
+      rowMin[y - top] = first;
+      rowMax[y - top] = last;
+    }
+    // the title is one band of rows; changes elsewhere (an animated item, the world) are separated by a gap. Take
+    // the band nearest to where the layout puts the title's first line.
+    int anchor = Math.clamp(layout.y() - top, 0, rows - 1);
+    int seed = -1;
+    for (int distance = 0; distance < rows && seed < 0; distance++) {
+      if (anchor - distance >= 0 && changed[anchor - distance]) seed = anchor - distance;
+      else if (anchor + distance < rows && changed[anchor + distance]) seed = anchor + distance;
+    }
+    if (seed < 0) return null;
+    int gap = 2 * scale;
+    int from = seed, to = seed;
+    for (int y = seed - 1, empty = 0; y >= 0 && empty <= gap; y--) {
+      if (changed[y]) {
+        from = y;
+        empty = 0;
+      } else empty++;
+    }
+    for (int y = seed + 1, empty = 0; y < rows && empty <= gap; y++) {
+      if (changed[y]) {
+        to = y;
+        empty = 0;
+      } else empty++;
+    }
+    int minX = Integer.MAX_VALUE, maxX = -1;
+    for (int y = from; y <= to; y++) {
+      if (!changed[y]) continue;
+      minX = Math.min(minX, rowMin[y]);
+      maxX = Math.max(maxX, rowMax[y]);
+    }
+    return new Rect(minX, top + from, maxX - minX + 1, to - from + 1);
+  }
+
+  private static boolean differs(int a, int b) {
+    for (int shift = 0; shift < 24; shift += 8) {
+      if (Math.abs(((a >> shift) & 0xFF) - ((b >> shift) & 0xFF)) > 24) return true;
+    }
+    return false;
+  }
+
+  private static Frame grab() {
+    return grabWith(regions -> { }, new CompletableFuture<Void>());
   }
 
   private interface RegionStep {

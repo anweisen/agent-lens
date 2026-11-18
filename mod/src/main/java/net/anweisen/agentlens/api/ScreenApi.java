@@ -181,6 +181,17 @@ final class ScreenApi {
     return target;
   }
 
+  /**
+   * Client thread. The open screen's title as text, without private-use characters (a resource pack's spacing and
+   * plate glyphs), or null without a screen. What a before/after check compares when a change is in the title.
+   */
+  static JsonElement titleText() {
+    var screen = net.minecraft.client.Minecraft.getInstance().gui.screen();
+    if (screen == null) return null;
+    String text = screen.getTitle().getString().replaceAll("[\\uE000-\\uF8FF]", " ").replaceAll("\\s+", " ").trim();
+    return new com.google.gson.JsonPrimitive(text);
+  }
+
   /** API thread. The lines drawn inside the tooltip of the next frame, top to bottom: any tooltip, not only items. */
   static JsonArray tooltipText() {
     List<Texts.Run> runs = Texts.snapshot();
