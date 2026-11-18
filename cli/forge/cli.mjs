@@ -35,7 +35,9 @@ const HELP = `usage: ${APP} pr <command>
         is needed and the table is appended. Takes capture files or "mc scene run" directories, pairs by
         file name; needs no compare step and no stitched image. Refuses a pair whose two sides have the same
         tooltip text (from the scene manifest) or identical image bytes, the sign of both sides running one build;
-        --allow-unchanged for a change that is not in the text. On a rerun, --before only feeds this check
+        --allow-unchanged for a change that is not in the text. On a rerun, --before only feeds this check,
+        unless --replace-before: then both cells are replaced (a "before" that was itself wrong, e.g. cut off).
+        The text compared is the screen title plus the tooltip
   evidence --repo <path> --pr <number> --new <file|dir> [--new <file|dir> ...] [--labels Neu]
         a new feature, where a "before" shows nothing: one or more shots (perspectives, states) in a "| Neu |"
         table (a name column first for several). A rerun replaces the rows of the same capture name and adds
@@ -59,7 +61,7 @@ const OPTIONS = {
   before: { type: 'string' }, after: { type: 'string' }, new: { type: 'string', multiple: true },
   labels: { type: 'string' },
   composite: { type: 'boolean' }, 'only-changed': { type: 'boolean' }, append: { type: 'boolean' },
-  'dry-run': { type: 'boolean' }, json: { type: 'boolean' }, 'allow-unchanged': { type: 'boolean' },
+  'dry-run': { type: 'boolean' }, json: { type: 'boolean' }, 'allow-unchanged': { type: 'boolean' }, 'replace-before': { type: 'boolean' },
 };
 
 function bodyFile(flags, command) {
@@ -178,18 +180,24 @@ async function run(command, flags, positionals) {
           + 'identical image): both sides most likely ran the same build. Check which build each side ran; '
           + '--allow-unchanged when the change is not in the text (an icon, a colour)');
       }
-      const files = plan ? uploadsOf(afters, 'after')
+      const replaceBefore = Boolean(plan && flags['replace-before']);
+      if (flags['replace-before'] && !befores) throw new UsageError('--replace-before needs --before');
+      const beforeOf = replaceBefore ? new Map(checked.map(pair => [pair.after.name, pair.before])) : null;
+      const files = plan ? [...(replaceBefore ? uploadsOf(checked.map(pair => pair.before), 'before') : []),
+        ...uploadsOf(afters, 'after')]
         : [...uploadsOf(pairs.map(pair => pair.before), 'before'), ...uploadsOf(pairs.map(pair => pair.after), 'after')];
       const uploaded = await uploadAll(provider, pr, files);
       const urls = Object.fromEntries(files.map(({ file }, index) => [file, uploaded[index].markdownUrl]));
       const markdown = plan
-        ? applyUpdate(plan, after => cellOf(labels[1], after, urls))
+        ? applyUpdate(plan, after => cellOf(labels[1], after, urls),
+          replaceBefore ? after => cellOf(labels[0], beforeOf.get(after.name), urls) : null)
         : [current.trimEnd(), newTable(labels, pairs, urls)].filter(Boolean).join('\n\n');
       const result = await provider.setDescription(pr, markdown);
       const names = afters.map(after => after.name).join(', ');
       const what = plan
-        ? `${labels[1]} replaced for ${names}; ${labels[0]} kept`
-          + (befores ? ' (--before ignored: the table already has it)' : '')
+        ? (replaceBefore ? `${labels[0]} and ${labels[1]} replaced for ${names}`
+          : `${labels[1]} replaced for ${names}; ${labels[0]} kept`
+            + (befores ? ' (--before ignored: the table already has it, --replace-before to replace it)' : ''))
         : `table added for ${names}`;
       if (!dryRun) {
         print({ mode: plan ? 'after-replaced' : 'table-added', captures: afters.map(after => after.name), urls,

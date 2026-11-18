@@ -16,15 +16,16 @@ function mediaOf(image) {
 }
 
 // From the manifest "mc scene run" or "web shot" writes next to its captures: the text each capture showed (the
-// hovered item's tooltip) and the order they were taken in (scene steps, spec shots).
+// screen title and the hovered item's tooltip) and the order they were taken in (scene steps, spec shots).
 function manifestOf(dir) {
   const manifest = path.join(dir, 'manifest.json');
   if (!fs.existsSync(manifest)) return { texts: {}, order: {} };
   const parsed = JSON.parse(fs.readFileSync(manifest, 'utf8'));
   const captures = parsed.captures ?? parsed.shots ?? [];
   return {
-    texts: Object.fromEntries(captures.filter(capture => capture.hovered?.tooltip?.length)
-      .map(capture => [capture.file, capture.hovered.tooltip.join('\n')])),
+    texts: Object.fromEntries(captures
+      .filter(capture => capture.screenTitle || capture.hovered?.tooltip?.length)
+      .map(capture => [capture.file, [capture.screenTitle ?? '', ...(capture.hovered?.tooltip ?? [])].join('\n')])),
     order: Object.fromEntries(captures.map((capture, index) => [capture.file, index])),
   };
 }
@@ -98,9 +99,11 @@ export function planUpdate(markdown, labels, afters) {
   return { lines, pairs };
 }
 
-export function applyUpdate({ lines, pairs }, cellFor) {
+// beforeCellFor (optional, --replace-before): a new "before" cell too, for a "before" that was itself wrong
+export function applyUpdate({ lines, pairs }, cellFor, beforeCellFor = null) {
   for (const [after, row] of pairs) {
     const cells = [...row.cells.slice(0, -1), cellFor(after)];
+    if (beforeCellFor) cells[cells.length - 2] = beforeCellFor(after);
     if (cells.length === 3) cells[0] = cells[0].replace(/\s*\(identical\)$/, '');
     lines[row.line] = `| ${cells.join(' | ')} |`;
   }
