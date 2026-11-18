@@ -58,6 +58,10 @@ public final class Capture {
       // the container panel always counts, plus whatever the screen drew around it (creative tabs, recipe book)
       Rect panel = Screens.toPixels(Screens.containerRect(container));
       regions.put(Regions.SCREEN, panel.union(regions.get(Regions.SCREEN)));
+      regions.put(Regions.PANEL, panel);
+      Rect title = regions.get(Regions.TITLE);
+      // from the layout bounds until a shot measures the title
+      if (title != null) regions.put(Regions.HEAD, head(panel, title, window.getGuiScale()));
     }
     // opened chat: the lines are drawn by the chat screen, together with the input field and its suggestions
     if (screen instanceof net.minecraft.client.gui.screens.ChatScreen && regions.containsKey(Regions.SCREEN)) {
@@ -157,13 +161,16 @@ public final class Capture {
     Rect found = ClientThread.await(rect, 1000, "the region");
     List<String> cut = new ArrayList<>();
     java.util.Set<String> names = names(region);
-    if ((names.contains(Regions.SCREEN) || names.contains(Regions.TITLE)) && frame.regions().containsKey(Regions.TITLE)) {
+    if ((names.contains(Regions.SCREEN) || names.contains(Regions.TITLE) || names.contains(Regions.HEAD))
+      && frame.regions().containsKey(Regions.TITLE)) {
       Rect drawn = measureTitle(frame);
       if (drawn != null) {
         Map<String, Rect> regions = new LinkedHashMap<>(frame.regions());
         regions.put(Regions.TITLE, drawn);
         regions.computeIfPresent(Regions.SCREEN, (name, screen) -> screen.union(drawn));
         regions.computeIfPresent("screen+tooltip", (name, both) -> both.union(drawn));
+        Rect panelRect = regions.get(Regions.PANEL);
+        if (panelRect != null) regions.put(Regions.HEAD, head(panelRect, drawn, frame.guiScale()));
         frame = new Frame(frame.pixels(), frame.width(), frame.height(), regions, frame.guiScale());
         Map<String, Rect> measured = regions;
         found = ClientThread.call(() -> resolve(region, measured));
@@ -262,6 +269,13 @@ public final class Capture {
       maxX = Math.max(maxX, rowMax[y]);
     }
     return new Rect(minX, top + from, maxX - minX + 1, to - from + 1);
+  }
+
+  /** The panel's full width, from the title's top (a plate may sit above the panel) to 4 GUI px below the title. */
+  private static Rect head(Rect panel, Rect title, int scale) {
+    int top = Math.min(title.y(), panel.y());
+    int bottom = Math.min(panel.bottom(), Math.max(title.bottom(), panel.y()) + 4 * Math.max(1, scale));
+    return new Rect(panel.x(), top, panel.w(), Math.max(1, bottom - top));
   }
 
   private static boolean differs(int a, int b) {

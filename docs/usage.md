@@ -262,6 +262,8 @@ not fit at the wanted GUI scale (`fit`), so a long lore or a large menu is never
 | `item` | the slot and its tooltip |
 | `menu+tooltip` | panel and tooltip together |
 | `menu-title` | a container's title as the frame shows it (see below) |
+| `menu-head` | the title across the panel's full width, down to just below it: the title in proportion to the menu (evidence for a title change) |
+| `panel` | a container's panel alone, without what the screen draws around it |
 | anything else | that region: `chat`, `actionbar`, `sidebar`, `title` (the HUD title), `hotbar`, ... |
 
 ```sh
